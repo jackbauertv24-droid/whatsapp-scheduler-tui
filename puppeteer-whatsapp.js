@@ -193,7 +193,7 @@ async function checkAuthOptions(phoneNumber) {
           });
           
           if (nextBtn) {
-            await delay(3000);
+            await delay(5000);  // Wait longer for pairing code to appear
             
             const codeResult = await page.evaluate(() => {
               const bodyText = document.body.innerText;
@@ -214,35 +214,40 @@ async function checkAuthOptions(phoneNumber) {
                 }
               }
               
-              // Look for pairing code
-              const codeEl = document.querySelector('[data-testid="link-code"]') || 
-                           document.querySelector('code') ||
-                           document.querySelector('[class*="code"]');
+              // Check if we're on the pairing code screen
+              if (!bodyText.includes('Enter code on phone') && !bodyText.includes('Link with phone number instead and enter')) {
+                return { code: null, error: 'Not on pairing code screen', bodyText };
+              }
               
-              const codeChars = document.querySelectorAll('[data-testid*="code-char"], [class*="code"] span');
+              // Look for pairing code - letters are on separate lines
+              const lines = bodyText.split('\n');
+              const codeLetters = lines.filter(l => l.length === 1 && l.match(/[A-Z0-9-]/));
+              
+              // Take first 9 characters (XXXX-XXXX format)
               let code = '';
+              if (codeLetters.length >= 9) {
+                code = codeLetters.slice(0, 9).join('');
+              } else if (codeLetters.length >= 8) {
+                code = codeLetters.slice(0, 8).join('');
+              }
               
-              if (codeEl && codeEl.textContent) {
-                code = codeEl.textContent.trim();
-              } else if (codeChars.length > 0) {
-                code = Array.from(codeChars).map(el => el.textContent).join('');
-              } else {
-                const codeMatch = bodyText.match(/\b[A-Z0-9]{4}-[A-Z0-9]{4}\b/);
-                if (codeMatch) {
-                  code = codeMatch[0];
-                }
+              // Backup: try regex on joined text
+              if (!code) {
+                const joined = bodyText.replace(/\n/g, '');
+                const match = joined.match(/[A-Z0-9]{4}-[A-Z0-9]{4}/);
+                if (match) code = match[0];
               }
               
               return { code, error, bodyText };
             });
             
-            if (codeResult.error) {
+            if (codeResult.error && !codeResult.code) {
               log(`WhatsApp error: "${codeResult.error}"`, 'error');
               await takeScreenshot('pairing-error.png');
               log('Full page text:', 'warn');
               log(codeResult.bodyText.substring(0, 800), 'warn');
             } else if (codeResult.code) {
-              log(`Pairing code displayed: ${codeResult.code}`, 'success');
+              log(`Pairing code: ${codeResult.code}`, 'success');
               return { 
                 success: true, 
                 method: 'pairing-code',
@@ -264,6 +269,7 @@ async function checkAuthOptions(phoneNumber) {
         }
       } catch (pairingErr) {
         log(`Pairing code attempt failed: ${pairingErr.message}`, 'warn');
+        await takeScreenshot('pairing-exception.png');
       }
       
       log('Falling back to QR code...', 'warn');
