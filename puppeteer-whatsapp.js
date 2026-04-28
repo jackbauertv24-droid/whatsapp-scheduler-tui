@@ -154,8 +154,9 @@ async function checkAuthOptions(phoneNumber) {
             log(`Entering phone number: ${phoneNumber}`);
           }
           
-          // Clear input and enter the number
-          await phoneInput.click({ clickCount: 3 });
+          // DON'T clear the input! WhatsApp needs the existing country prefix.
+          // Just click to focus, then type (appends after +86 prefix)
+          await phoneInput.click();
           await delay(100);
           await phoneInput.type(numberToEnter, { delay: 50 });
           await delay(500);
