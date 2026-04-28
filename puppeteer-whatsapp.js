@@ -164,14 +164,28 @@ async function checkAuthOptions(phoneNumber) {
           const enteredValue = await phoneInput.evaluate(el => el.value);
           log(`Input field value: ${enteredValue}`);
           
-          // Click Next - WhatsApp uses div[role="button"] for the Next button too
+          // Click Next - may be div[role="button"] or just cursor:pointer div
           const nextBtn = await page.evaluate(() => {
-            const btnDivs = document.querySelectorAll('div[role="button"]');
-            for (const div of btnDivs) {
+            // Try div[role="button"] first
+            const roleBtns = document.querySelectorAll('div[role="button"]');
+            for (const div of roleBtns) {
               const text = (div.textContent || '').toLowerCase().trim();
               if (text === 'next' || text.includes('next')) {
                 div.click();
-                return true;
+                return 'role-button';
+              }
+            }
+            
+            // Try any div/span with text "Next" and pointer cursor
+            const all = document.querySelectorAll('div, span');
+            for (const el of all) {
+              const text = (el.textContent || '').trim();
+              if (text === 'Next' || text === 'next') {
+                const style = window.getComputedStyle(el);
+                if (style.cursor === 'pointer') {
+                  el.click();
+                  return 'cursor-pointer';
+                }
               }
             }
             return false;
