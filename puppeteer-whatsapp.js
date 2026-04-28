@@ -138,24 +138,53 @@ async function checkAuthOptions(phoneNumber) {
           if (nextBtn) {
             await delay(3000);
             
-            const codeText = await page.evaluate(() => {
+            const codeResult = await page.evaluate(() => {
+              // Look for code in various ways
               const codeEl = document.querySelector('[data-testid="link-code"]') || 
                            document.querySelector('code') ||
                            document.querySelector('[class*="code"]');
-              return codeEl ? codeEl.textContent || codeEl.innerText : null;
+              
+              // Also try to find individual code letter elements
+              const codeChars = document.querySelectorAll('[data-testid*="code-char"], [class*="code"] span');
+              let code = '';
+              
+              if (codeEl && codeEl.textContent) {
+                code = codeEl.textContent.trim();
+              } else if (codeChars.length > 0) {
+                code = Array.from(codeChars).map(el => el.textContent).join('');
+              } else {
+                // Look for pattern like XXXX-XXXX in the page text
+                const bodyText = document.body.innerText;
+                const codeMatch = bodyText.match(/\b[A-Z0-9]{4}-[A-Z0-9]{4}\b/);
+                if (codeMatch) {
+                  code = codeMatch[0];
+                }
+              }
+              
+              // Get any error messages
+              const errorEl = document.querySelector('[class*="error"], [data-testid*="error"]');
+              
+              return { code, error: errorEl ? errorEl.textContent : null };
             });
             
-            if (codeText) {
-              log(`Pairing code displayed: ${codeText}`, 'success');
+            if (codeResult.code) {
+              log(`Pairing code displayed: ${codeResult.code}`, 'success');
               return { 
                 success: true, 
                 method: 'pairing-code',
-                pairingCode: codeText,
+                pairingCode: codeResult.code,
                 phone: phoneNumber
               };
+            } else if (codeResult.error) {
+              log(`Error: ${codeResult.error}`, 'error');
+              await takeScreenshot('pairing-error.png');
             } else {
               log('Pairing code not found on page, taking screenshot', 'warn');
               await takeScreenshot('pairing-code-not-found.png');
+              
+              // Debug: show page content
+              const debugText = await page.evaluate(() => document.body.innerText.substring(0, 500));
+              log(`Page content preview: ${debugText}`, 'warn');
             }
           }
         } else {
