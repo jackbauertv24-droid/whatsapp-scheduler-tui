@@ -71,19 +71,18 @@ async function checkAuthOptions(phoneNumber) {
     await page.waitForSelector('canvas', { timeout: 10000 });
     log('QR code canvas found');
     
+    // WhatsApp uses div[role="button"] not actual button elements
     const pageButtons = await page.evaluate(() => {
-      const buttons = document.querySelectorAll('button, [role="button"]');
-      return Array.from(buttons).map(b => ({
-        text: (b.innerText || b.textContent || '').trim(),
-        ariaLabel: b.ariaLabel || '',
-        className: b.className || ''
-      })).filter(b => b.text || b.ariaLabel);
+      const btnDivs = document.querySelectorAll('div[role="button"]');
+      return Array.from(btnDivs).map(d => ({
+        text: (d.textContent || '').trim(),
+        className: d.className || ''
+      })).filter(d => d.text);
     });
     
     const pairingButton = pageButtons.find(b => 
       b.text.toLowerCase().includes('link with phone') ||
-      b.text.toLowerCase().includes('log in with phone') ||
-      b.ariaLabel.toLowerCase().includes('phone')
+      b.text.toLowerCase().includes('log in with phone')
     );
     
     const hasPairingOption = !!pairingButton;
@@ -97,11 +96,12 @@ async function checkAuthOptions(phoneNumber) {
       
       try {
         const clicked = await page.evaluate(() => {
-          const buttons = document.querySelectorAll('button, [role="button"]');
-          for (const btn of buttons) {
-            const text = (btn.innerText || btn.textContent || '').toLowerCase();
+          // WhatsApp uses div[role="button"] not actual button elements
+          const btnDivs = document.querySelectorAll('div[role="button"]');
+          for (const div of btnDivs) {
+            const text = (div.textContent || '').toLowerCase();
             if (text.includes('link with phone') || text.includes('log in with phone')) {
-              btn.click();
+              div.click();
               return true;
             }
           }
@@ -164,12 +164,13 @@ async function checkAuthOptions(phoneNumber) {
           const enteredValue = await phoneInput.evaluate(el => el.value);
           log(`Input field value: ${enteredValue}`);
           
+          // Click Next - WhatsApp uses div[role="button"] for the Next button too
           const nextBtn = await page.evaluate(() => {
-            const buttons = document.querySelectorAll('button');
-            for (const btn of buttons) {
-              const text = (btn.innerText || btn.textContent || '').toLowerCase();
-              if (text.includes('next') || text.includes('continue') || text.includes('send')) {
-                btn.click();
+            const btnDivs = document.querySelectorAll('div[role="button"]');
+            for (const div of btnDivs) {
+              const text = (div.textContent || '').toLowerCase().trim();
+              if (text === 'next' || text.includes('next')) {
+                div.click();
                 return true;
               }
             }
@@ -254,11 +255,11 @@ async function checkAuthOptions(phoneNumber) {
       
       // Click "Log in with QR code" to go back to QR screen
       const qrBtnClicked = await page.evaluate(() => {
-        const buttons = document.querySelectorAll('button, [role="button"]');
-        for (const btn of buttons) {
-          const text = (btn.innerText || btn.textContent || '').toLowerCase();
+        const btnDivs = document.querySelectorAll('div[role="button"]');
+        for (const div of btnDivs) {
+          const text = (div.textContent || '').toLowerCase();
           if (text.includes('qr code') || text.includes('scan')) {
-            btn.click();
+            div.click();
             return true;
           }
         }
