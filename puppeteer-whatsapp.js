@@ -116,15 +116,24 @@ async function checkAuthOptions(phoneNumber) {
         await delay(2000);
         log('Clicked pairing button, waiting for phone input...');
         
-        // First, check the current country code prefix shown in the UI
+        // Find the country code prefix displayed in the UI
         const countryPrefix = await page.evaluate(() => {
-          const prefixEl = document.querySelector('[class*="country-code"]') || 
-                          document.querySelector('span[dir="ltr"]') ||
-                          document.querySelector('[data-testid*="country"]');
-          if (prefixEl) {
-            const text = prefixEl.textContent || prefixEl.innerText || '';
-            const match = text.match(/\+?\d+/);
-            return match ? match[0].replace('+', '') : null;
+          // Look for span/div showing country code like "+86"
+          const selectors = [
+            'span.x19co3pv',
+            'div[dir="ltr"]',
+            '[class*="country-code"]'
+          ];
+          
+          for (const sel of selectors) {
+            const el = document.querySelector(sel);
+            if (el) {
+              const text = (el.textContent || '').trim();
+              // Match +XX or just XX pattern
+              if (text.match(/^\+?\d{1,4}$/)) {
+                return text.replace('+', '');
+              }
+            }
           }
           return null;
         });
