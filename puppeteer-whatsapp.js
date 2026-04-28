@@ -116,12 +116,44 @@ async function checkAuthOptions(phoneNumber) {
         await delay(2000);
         log('Clicked pairing button, waiting for phone input...');
         
-        const phoneInput = await page.$('input[type="tel"], input[placeholder*="phone"], input');
+        // First, check the current country code prefix shown in the UI
+        const countryPrefix = await page.evaluate(() => {
+          const prefixEl = document.querySelector('[class*="country-code"]') || 
+                          document.querySelector('span[dir="ltr"]') ||
+                          document.querySelector('[data-testid*="country"]');
+          if (prefixEl) {
+            const text = prefixEl.textContent || prefixEl.innerText || '';
+            const match = text.match(/\+?\d+/);
+            return match ? match[0].replace('+', '') : null;
+          }
+          return null;
+        });
+        
+        log(`WhatsApp Web country prefix: ${countryPrefix ? '+' + countryPrefix : 'unknown'}`);
+        
+        const phoneInput = await page.$('input[type="tel"], input');
         if (phoneInput) {
-          log(`Entering phone number: ${phoneNumber}`);
-          await phoneInput.click();
-          await phoneInput.type(phoneNumber.replace(/[^0-9]/g, ''), { delay: 50 });
+          const cleanPhone = phoneNumber.replace(/[^0-9]/g, '');
+          
+          // If WhatsApp already has a country prefix and our number starts with it,
+          // we should only enter the local number part
+          let numberToEnter = cleanPhone;
+          if (countryPrefix && cleanPhone.startsWith(countryPrefix)) {
+            numberToEnter = cleanPhone.substring(countryPrefix.length);
+            log(`Phone: ${phoneNumber} -> local part: ${numberToEnter} (stripped country code ${countryPrefix})`);
+          } else {
+            log(`Entering phone number: ${phoneNumber}`);
+          }
+          
+          // Clear input and enter the number
+          await phoneInput.click({ clickCount: 3 });
+          await delay(100);
+          await phoneInput.type(numberToEnter, { delay: 50 });
           await delay(500);
+          
+          // Verify the entered number
+          const enteredValue = await phoneInput.evaluate(el => el.value);
+          log(`Input field value: ${enteredValue}`);
           
           const nextBtn = await page.evaluate(() => {
             const buttons = document.querySelectorAll('button');
@@ -139,12 +171,29 @@ async function checkAuthOptions(phoneNumber) {
             await delay(3000);
             
             const codeResult = await page.evaluate(() => {
-              // Look for code in various ways
+              const bodyText = document.body.innerText;
+              
+              // Check for error messages first
+              const errorPatterns = ['valid phone number', 'invalid', 'error', 'required', 'not found'];
+              let error = null;
+              for (const pattern of errorPatterns) {
+                if (bodyText.toLowerCase().includes(pattern)) {
+                  const lines = bodyText.split('\n');
+                  for (const line of lines) {
+                    if (line.toLowerCase().includes(pattern) && line.length < 100) {
+                      error = line.trim();
+                      break;
+                    }
+                  }
+                  break;
+                }
+              }
+              
+              // Look for pairing code
               const codeEl = document.querySelector('[data-testid="link-code"]') || 
                            document.querySelector('code') ||
                            document.querySelector('[class*="code"]');
               
-              // Also try to find individual code letter elements
               const codeChars = document.querySelectorAll('[data-testid*="code-char"], [class*="code"] span');
               let code = '';
               
@@ -153,21 +202,21 @@ async function checkAuthOptions(phoneNumber) {
               } else if (codeChars.length > 0) {
                 code = Array.from(codeChars).map(el => el.textContent).join('');
               } else {
-                // Look for pattern like XXXX-XXXX in the page text
-                const bodyText = document.body.innerText;
                 const codeMatch = bodyText.match(/\b[A-Z0-9]{4}-[A-Z0-9]{4}\b/);
                 if (codeMatch) {
                   code = codeMatch[0];
                 }
               }
               
-              // Get any error messages
-              const errorEl = document.querySelector('[class*="error"], [data-testid*="error"]');
-              
-              return { code, error: errorEl ? errorEl.textContent : null };
+              return { code, error, bodyText };
             });
             
-            if (codeResult.code) {
+            if (codeResult.error) {
+              log(`WhatsApp error: "${codeResult.error}"`, 'error');
+              await takeScreenshot('pairing-error.png');
+              log('Full page text:', 'warn');
+              log(codeResult.bodyText.substring(0, 800), 'warn');
+            } else if (codeResult.code) {
               log(`Pairing code displayed: ${codeResult.code}`, 'success');
               return { 
                 success: true, 
@@ -175,17 +224,14 @@ async function checkAuthOptions(phoneNumber) {
                 pairingCode: codeResult.code,
                 phone: phoneNumber
               };
-            } else if (codeResult.error) {
-              log(`Error: ${codeResult.error}`, 'error');
-              await takeScreenshot('pairing-error.png');
             } else {
-              log('Pairing code not found on page, taking screenshot', 'warn');
+              log('Pairing code not found on page', 'warn');
               await takeScreenshot('pairing-code-not-found.png');
-              
-              // Debug: show page content
-              const debugText = await page.evaluate(() => document.body.innerText.substring(0, 500));
-              log(`Page content preview: ${debugText}`, 'warn');
+              log(`Page content preview: ${codeResult.bodyText.substring(0, 500)}`, 'warn');
             }
+          } else {
+            log('Next button not found after entering phone', 'error');
+            await takeScreenshot('no-next-button.png');
           }
         } else {
           log('Phone input not found', 'warn');
@@ -196,6 +242,24 @@ async function checkAuthOptions(phoneNumber) {
       }
       
       log('Falling back to QR code...', 'warn');
+      
+      // Click "Log in with QR code" to go back to QR screen
+      const qrBtnClicked = await page.evaluate(() => {
+        const buttons = document.querySelectorAll('button, [role="button"]');
+        for (const btn of buttons) {
+          const text = (btn.innerText || btn.textContent || '').toLowerCase();
+          if (text.includes('qr code') || text.includes('scan')) {
+            btn.click();
+            return true;
+          }
+        }
+        return false;
+      });
+      
+      if (qrBtnClicked) {
+        log('Clicked "Log in with QR code", waiting for QR...', 'warn');
+        await delay(3000);
+      }
     }
     
     log('Using QR code authentication');
