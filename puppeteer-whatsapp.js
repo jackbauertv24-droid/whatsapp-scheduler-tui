@@ -1,5 +1,6 @@
 import puppeteer from 'puppeteer';
 import qrcode from 'qrcode-terminal';
+import fs from 'fs';
 
 let browser = null;
 let page = null;
@@ -7,6 +8,8 @@ let connectionState = 'disconnected';
 let userPhone = null;
 
 const BASE_URL = 'https://web.whatsapp.com';
+
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function log(message, level = 'info') {
   const timestamp = new Date().toLocaleTimeString();
@@ -47,7 +50,7 @@ async function init(options = {}) {
     });
     
     log('Waiting for page to load...');
-    await page.waitForTimeout(3000);
+    await delay(3000);
     
     connectionState = 'connecting';
     
@@ -68,58 +71,102 @@ async function checkAuthOptions(phoneNumber) {
     await page.waitForSelector('canvas', { timeout: 10000 });
     log('QR code canvas found');
     
-    const pairingOption = await page.$('[data-testid="link-phone-number-option"]');
-    const pairingButton = await page.$('button[aria-label*="phone"]');
-    const linkByText = await page.$x("//button[contains(text(), 'Link with phone number')]");
+    const pageButtons = await page.evaluate(() => {
+      const buttons = document.querySelectorAll('button, [role="button"]');
+      return Array.from(buttons).map(b => ({
+        text: (b.innerText || b.textContent || '').trim(),
+        ariaLabel: b.ariaLabel || '',
+        className: b.className || ''
+      })).filter(b => b.text || b.ariaLabel);
+    });
     
-    const hasPairingOption = pairingOption || pairingButton || linkByText.length > 0;
+    const pairingButton = pageButtons.find(b => 
+      b.text.toLowerCase().includes('link with phone') ||
+      b.text.toLowerCase().includes('log in with phone') ||
+      b.ariaLabel.toLowerCase().includes('phone')
+    );
     
+    const hasPairingOption = !!pairingButton;
     log(`Pairing code option available: ${hasPairingOption ? 'YES' : 'NO'}`);
+    if (pairingButton) {
+      log(`Found button: "${pairingButton.text}"`);
+    }
     
     if (hasPairingOption && phoneNumber) {
       log('Attempting pairing code authentication...', 'warn');
       
       try {
-        if (linkByText.length > 0) {
-          await linkByText[0].click();
-        } else if (pairingButton) {
-          await pairingButton.click();
-        } else if (pairingOption) {
-          await pairingOption.click();
+        const clicked = await page.evaluate(() => {
+          const buttons = document.querySelectorAll('button, [role="button"]');
+          for (const btn of buttons) {
+            const text = (btn.innerText || btn.textContent || '').toLowerCase();
+            if (text.includes('link with phone') || text.includes('log in with phone')) {
+              btn.click();
+              return true;
+            }
+          }
+          return false;
+        });
+        
+        if (!clicked) {
+          log('Could not click pairing button', 'error');
+          return await getQRCode();
         }
         
-        await page.waitForTimeout(2000);
+        await delay(2000);
+        log('Clicked pairing button, waiting for phone input...');
         
-        log('Clicking "Link with phone number"...');
-        
-        const continueBtn = await page.$('button[data-testid="link-phone-btn"]');
-        if (continueBtn) {
-          const phoneInput = await page.$('input[data-testid="phone-number-input"]');
-          if (phoneInput) {
-            log(`Entering phone number: ${phoneNumber}`);
-            await phoneInput.type(phoneNumber.replace('+', ''), { delay: 50 });
-            await page.waitForTimeout(500);
+        const phoneInput = await page.$('input[type="tel"], input[placeholder*="phone"], input');
+        if (phoneInput) {
+          log(`Entering phone number: ${phoneNumber}`);
+          await phoneInput.click();
+          await phoneInput.type(phoneNumber.replace(/[^0-9]/g, ''), { delay: 50 });
+          await delay(500);
+          
+          const nextBtn = await page.evaluate(() => {
+            const buttons = document.querySelectorAll('button');
+            for (const btn of buttons) {
+              const text = (btn.innerText || btn.textContent || '').toLowerCase();
+              if (text.includes('next') || text.includes('continue') || text.includes('send')) {
+                btn.click();
+                return true;
+              }
+            }
+            return false;
+          });
+          
+          if (nextBtn) {
+            await delay(3000);
             
-            await continueBtn.click();
-            await page.waitForTimeout(3000);
+            const codeText = await page.evaluate(() => {
+              const codeEl = document.querySelector('[data-testid="link-code"]') || 
+                           document.querySelector('code') ||
+                           document.querySelector('[class*="code"]');
+              return codeEl ? codeEl.textContent || codeEl.innerText : null;
+            });
             
-            const codeElement = await page.$('[data-testid="link-code"]');
-            if (codeElement) {
-              const code = await codeElement.evaluate(el => el.textContent);
-              log(`Pairing code displayed on page: ${code}`, 'success');
+            if (codeText) {
+              log(`Pairing code displayed: ${codeText}`, 'success');
               return { 
                 success: true, 
                 method: 'pairing-code',
-                pairingCode: code,
+                pairingCode: codeText,
                 phone: phoneNumber
               };
+            } else {
+              log('Pairing code not found on page, taking screenshot', 'warn');
+              await takeScreenshot('pairing-code-not-found.png');
             }
           }
+        } else {
+          log('Phone input not found', 'warn');
+          await takeScreenshot('no-phone-input.png');
         }
       } catch (pairingErr) {
         log(`Pairing code attempt failed: ${pairingErr.message}`, 'warn');
-        log('Falling back to QR code...', 'warn');
       }
+      
+      log('Falling back to QR code...', 'warn');
     }
     
     log('Using QR code authentication');
@@ -143,26 +190,40 @@ async function getQRCode() {
   try {
     await page.waitForSelector('canvas', { timeout: 15000 });
     
-    const qrDataUrl = await page.evaluate(() => {
+    const qrResult = await page.evaluate(() => {
       const canvas = document.querySelector('canvas');
       if (!canvas) return null;
-      return canvas.toDataURL('image/png');
+      return {
+        dataUrl: canvas.toDataURL('image/png'),
+        width: canvas.width,
+        height: canvas.height
+      };
     });
     
-    if (!qrDataUrl) {
+    if (!qrResult) {
       log('Could not extract QR from canvas', 'error');
       return { success: false, error: 'No QR code found' };
     }
     
     log('QR code extracted successfully', 'success');
     
-    qrcode.generate(qrDataUrl, { small: false });
+    const qrPath = 'qrcode.png';
+    const base64Data = qrResult.dataUrl.replace(/^data:image\/png;base64,/, '');
+    fs.writeFileSync(qrPath, Buffer.from(base64Data, 'base64'));
+    log(`QR code saved to: ${qrPath}`, 'success');
+    
+    try {
+      qrcode.generate(qrResult.dataUrl, { small: true });
+    } catch (e) {
+      log('(QR too large for terminal display - see qrcode.png file)', 'warn');
+    }
     
     return {
       success: true,
       method: 'qr-code',
-      qrDataUrl,
-      message: 'Scan QR code with WhatsApp on your phone'
+      qrDataUrl: qrResult.dataUrl,
+      qrPath,
+      message: 'Scan QR code with WhatsApp on your phone. QR saved to qrcode.png'
     };
   } catch (err) {
     log(`QR fetch error: ${err.message}`, 'error');
@@ -185,7 +246,7 @@ async function enterPairingCode(code) {
     }
     
     await codeInput.type(code, { delay: 100 });
-    await page.waitForTimeout(1000);
+    await delay(1000);
     
     const verifyBtn = await page.$('button[data-testid="link-code-verify-btn"]');
     if (verifyBtn) {
@@ -228,9 +289,9 @@ async function waitForConnection(timeout = 60000) {
         return true;
       }
       
-      await page.waitForTimeout(1000);
+      await delay(1000);
     } catch (err) {
-      await page.waitForTimeout(1000);
+      await delay(1000);
     }
   }
   
@@ -244,12 +305,12 @@ async function getUserInfo() {
     const userMenu = await page.$('[data-testid="menu"]');
     if (userMenu) {
       await userMenu.click();
-      await page.waitForTimeout(500);
+      await delay(500);
       
       const profileItem = await page.$('[data-testid="menu-item-profile"]');
       if (profileItem) {
         await profileItem.click();
-        await page.waitForTimeout(500);
+        await delay(500);
         
         const nameEl = await page.$('[data-testid="profile-name"]');
         const phoneEl = await page.$('[data-testid="profile-phone"]');
@@ -323,19 +384,19 @@ async function sendMessage(jid, content) {
   log(`Sending message to: ${jid}`);
   
   try {
-    await page.waitForTimeout(500);
+    await delay(500);
     
     const searchInput = await page.$('[data-testid="chat-list-search"]');
     if (searchInput) {
       const chatName = jid.split('@')[0].replace(/[0-9]/g, '').slice(0, 10) || jid.split('@')[0];
       
       await searchInput.type(chatName, { delay: 30 });
-      await page.waitForTimeout(2000);
+      await delay(2000);
       
       const firstChat = await page.$('[data-testid="chat-list-item"]');
       if (firstChat) {
         await firstChat.click();
-        await page.waitForTimeout(1000);
+        await delay(1000);
       } else {
         log('Chat not found in list', 'warn');
         return { success: false, error: 'Chat not found' };
@@ -352,14 +413,14 @@ async function sendMessage(jid, content) {
     
     await inputBox.focus();
     await inputBox.type(content, { delay: 20 });
-    await page.waitForTimeout(300);
+    await delay(300);
     
     const sendBtn = await page.$('[data-testid="compose-btn-send"]');
     if (sendBtn) {
       await sendBtn.click();
       log('Message sent!', 'success');
       
-      await page.waitForTimeout(1000);
+      await delay(1000);
       
       return { success: true };
     } else {
