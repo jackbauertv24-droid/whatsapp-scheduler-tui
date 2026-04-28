@@ -1,27 +1,21 @@
-# WhatsApp Scheduler TUI
+# WhatsApp Scheduler TUI (Puppeteer)
 
-A terminal-based testing tool for WhatsApp integration using Baileys. This tool helps debug and verify WhatsApp connection issues before implementing in the Android/Web versions.
+A terminal-based testing tool for WhatsApp Web automation using Puppeteer.
+
+## Why Puppeteer?
+
+This version uses Puppeteer to control a real browser accessing WhatsApp Web:
+- **Legitimate browser context** - WhatsApp sees it as a real user
+- **Pairing code OR QR code** - Checks if pairing code option is available
+- **Visible logging** - All actions logged to terminal
+- **Screenshots** - Debug what's happening in the browser
 
 ## Purpose
 
-- Test Baileys WhatsApp connection with visible logs
-- Verify pairing code authentication flow
-- Debug connection issues (IP blocking, session expiry, etc.)
-- Test message sending functionality
-
-## Features
-
-- ✅ Pairing code authentication
-- ✅ Session persistence (reconnect without re-pairing)
-- ✅ Chat list retrieval
-- ✅ Send test messages
-- ✅ Detailed logging (all Baileys events visible)
-- ✅ Connection status monitoring
-
-## Prerequisites
-
-- Node.js 18+
-- A phone with WhatsApp installed
+- Test if WhatsApp Web works from your IP
+- Debug authentication flow
+- Check for pairing code availability on WhatsApp Web
+- Test chat/message functionality
 
 ## Installation
 
@@ -35,88 +29,93 @@ npm install
 npm start
 ```
 
-### Menu Options
+For headless mode (no visible browser):
+```bash
+npm run start:headless
+```
+
+### Menu
 
 ```
-[1] Login (Pairing Code)  - Authenticate with WhatsApp
-[2] Show Detailed Status  - View connection details
-[3] List Chats            - Fetch recent chats
-[4] Send Test Message     - Send a message to a chat
-[5] Logout                - Clear session
-[6] List Saved Sessions   - Show stored auth files
+[1] Login - Authenticate (pairing code or QR)
+[2] Show Status - View connection details
+[3] Take Screenshot - Debug browser state
+[4] List Chats - Fetch recent chats
+[5] Send Test Message - Send a message
+[6] Logout - Close browser
 [0] Exit
 ```
 
 ### Login Flow
 
-1. Select option `[1]`
-2. Enter your phone number (e.g., `+1234567890`)
-3. Wait for pairing code generation
-4. Open WhatsApp on your phone
-5. Go to Settings → Linked Devices → Link a Device
-6. Enter the displayed pairing code OR wait for SMS
-7. Enter the 8-digit code from WhatsApp
-8. Wait for connection confirmation
+**Option A: Pairing Code (if available)**
+1. Enter your phone number
+2. TUI checks WhatsApp Web for pairing code option
+3. If available → displays pairing code from browser
+4. Enter code from WhatsApp on your phone
+5. Connected!
 
-### Session Persistence
+**Option B: QR Code (fallback)**
+1. Skip phone number input
+2. QR code displayed in terminal
+3. Scan with WhatsApp on your phone
+4. Connected!
 
-Sessions are stored in `./sessions/{phone_number}/`. You can reconnect using saved sessions:
+## How Pairing Code Works on WhatsApp Web
 
-1. Select option `[1]`
-2. If asked "Use existing session?", type `y`
-3. Enter your phone number
-4. Session will attempt to reconnect automatically
+WhatsApp has been rolling out "Link with phone number" feature:
+- Some accounts show pairing code option
+- Some accounts only show QR code
+- TUI checks for both options
 
 ## Debugging
 
-### Connection Issues
+### Screenshots
 
-Common problems visible in logs:
+All screenshots saved as PNG files:
+- `connection-failed.png` - If connection fails
+- `send-failed.png` - If message send fails  
+- `screenshot.png` - Manual screenshot
 
-| Error Code | Meaning | Solution |
-|------------|---------|----------|
-| 405 | Location/region blocked | Use residential IP or different location |
-| 401 | Session invalidated | Re-login with new pairing code |
-| 428 | Connection timeout | Check network, retry |
-| 503 | Service unavailable | Wait and retry |
+### Headless Mode
 
-### Logs
+Run without visible browser:
+```bash
+HEADLESS=true npm start
+```
 
-All Baileys events are logged with timestamps:
-- Connection updates
-- Credential changes
-- Message events
-- Error details
+Take screenshots to see what's happening.
 
-### Testing Flow
+## Known Issues
 
-1. **First test**: Run login, check if pairing code generates
-2. **If 405 error**: WhatsApp is blocking your IP
-3. **If pairing code works**: Continue with chat/message tests
-4. **If connected**: Verify session persistence works
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| 405 error | IP blocking | Try residential IP |
+| Pairing code unavailable | WhatsApp region/account | Use QR code |
+| Timeout | Slow connection | Check network |
+| Browser crashes | Puppeteer issues | Update puppeteer |
 
 ## Project Structure
 
 ```
 whatsapp-scheduler-tui/
-├── index.js           # CLI menu
-├── whatsapp.js        # Baileys wrapper (with logging)
-├── auth-store.js      # Session persistence
-├── sessions/          # Stored auth files
-└── package.json
+├── index.js              # CLI menu
+├── puppeteer-whatsapp.js  # Puppeteer WhatsApp Web automation
+├── package.json
+└── README.md
 ```
 
-## Related Projects
+## Comparison
 
-- [whatsapp-scheduler-web](https://github.com/jackbauertv24-droid/whatsapp-scheduler-web) - Web version
-- [whatsapp-scheduler-android](https://github.com/jackbauertv24-droid/whatsapp-scheduler-android) - Android app
+| Tool | Auth | Platform | Block Risk |
+|------|------|----------|------------|
+| Baileys | Pairing Code | Mobile protocol | Higher (detects automation) |
+| Puppeteer | QR + Pairing | WhatsApp Web | Lower (real browser) |
 
-## Notes
+## Related
 
-- This tool is for debugging purposes only
-- WhatsApp may block data center IPs (error 405)
-- Sessions expire and need re-authentication
-- Use responsibly - WhatsApp may ban accounts for automation
+- [whatsapp-scheduler-web](https://github.com/jackbauertv24-droid/whatsapp-scheduler-web)
+- [whatsapp-scheduler-android](https://github.com/jackbauertv24-droid/whatsapp-scheduler-android)
 
 ## License
 

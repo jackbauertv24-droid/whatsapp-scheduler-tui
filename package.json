@@ -1,18 +1,18 @@
 {
   "name": "whatsapp-scheduler-tui",
-  "version": "1.0.0",
-  "description": "Terminal UI tool for testing WhatsApp Baileys integration",
+  "version": "2.0.0",
+  "description": "Terminal UI tool for testing WhatsApp via Puppeteer",
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "start:headless": "HEADLESS=true node index.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.6.0",
-    "pino": "^8.18.0",
-    "pino-pretty": "^10.3.1"
+    "puppeteer": "^22.0.0",
+    "qrcode-terminal": "^0.12.0"
   },
-  "keywords": ["whatsapp", "baileys", "tui", "cli"],
+  "keywords": ["whatsapp", "puppeteer", "tui", "cli"],
   "author": "",
   "license": "MIT"
 }
