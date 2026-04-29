@@ -8,7 +8,8 @@ import {
   disconnect,
   getStatus,
   isConnected,
-  takeScreenshot
+  takeScreenshot,
+  saveHTML
 } from './puppeteer-whatsapp.js';
 
 const rl = readline.createInterface({
@@ -42,9 +43,10 @@ function printMenu() {
   console.log('[1] Login (Pairing Code / QR Code)');
   console.log('[2] Show Status');
   console.log('[3] Take Screenshot (debug)');
-  console.log('[4] List Chats');
-  console.log('[5] Send Test Message');
-  console.log('[6] Logout');
+  console.log('[4] Save HTML Source (debug)');
+  console.log('[5] List Chats');
+  console.log('[6] Send Test Message');
+  console.log('[7] Logout');
   console.log('[0] Exit');
   console.log('');
 }
@@ -139,6 +141,22 @@ async function handleScreenshot() {
     console.log(`✓ Saved: ${result.path}`);
   } else {
     console.log('✗ Failed:', result.error);
+  }
+}
+
+async function handleHTML() {
+  console.log('\n--- Save HTML Source ---');
+  
+  const filename = await question('Filename (default: page-source.html): ');
+  const path = filename.trim() || 'page-source.html';
+  
+  const result = await saveHTML(path);
+  
+  if (result.success) {
+    console.log(`✓ Saved: ${result.path}`);
+    console.log('You can analyze this file to find correct selectors');
+  } else {
+    console.log('✗ Failed:', result.error || 'Browser not running');
   }
 }
 
@@ -269,12 +287,15 @@ async function main() {
         await handleScreenshot();
         break;
       case '4':
-        await handleChats();
+        await handleHTML();
         break;
       case '5':
-        await handleSend();
+        await handleChats();
         break;
       case '6':
+        await handleSend();
+        break;
+      case '7':
         await handleLogout();
         break;
       case '0':
