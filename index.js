@@ -2,7 +2,6 @@ import readline from 'readline';
 import {
   init,
   getQRCode,
-  enterPairingCode,
   waitForConnection,
   getChats,
   sendMessage,
@@ -76,37 +75,30 @@ async function handleLogin() {
     return;
   }
   
+  if (result.method === 'session-restored') {
+    console.log('\n✓ Already connected! Session restored.');
+    console.log(result.message);
+    return;
+  }
+  
   if (result.method === 'pairing-code') {
     console.log('\n' + '='.repeat(60));
     console.log(`PAIRING CODE: ${result.pairingCode}`);
     console.log('='.repeat(60));
-    console.log('\nEnter this code in WhatsApp on your phone');
-    console.log('Settings → Linked Devices → Link with phone number');
-    console.log('');
-    
-    const codeInput = await question('Enter the code from WhatsApp (or press Enter to wait): ');
-    
-    if (codeInput.trim()) {
-      console.log('\nSubmitting code...');
-      const codeResult = await enterPairingCode(codeInput.trim());
-      
-      if (!codeResult.success) {
-        console.log('✗ Code submission failed:', codeResult.error);
-      }
-    }
+    console.log('\nEnter this code in WhatsApp on your phone:');
+    console.log('1. Open WhatsApp');
+    console.log('2. Settings → Linked Devices → Link with phone number');
+    console.log('3. Enter the code shown above');
+    console.log('\nWaiting for you to complete pairing on your phone...');
   } else if (result.method === 'qr-code') {
     console.log('\n' + '='.repeat(60));
-    console.log('QR CODE DISPLAYED ABOVE (in terminal)');
+    console.log('QR CODE saved to qrcode.png');
+    console.log('Open qrcode.png and scan with WhatsApp on your phone');
+    console.log('Settings → Linked Devices → Link a Device');
     console.log('='.repeat(60));
-    console.log('\n1. Open WhatsApp on your phone');
-    console.log('2. Settings → Linked Devices → Link a Device');
-    console.log('3. Scan the QR code shown above');
-    console.log('');
   }
   
   console.log('\nWaiting for connection (max 60 seconds)...');
-  console.log('Watch the browser window for QR code if visible');
-  console.log('');
   
   const connected = await waitForConnection(60000);
   

@@ -1,6 +1,8 @@
 import puppeteer from 'puppeteer';
 import qrcode from 'qrcode-terminal';
 import fs from 'fs';
+import path from 'path';
+import os from 'os';
 
 let browser = null;
 let page = null;
@@ -8,6 +10,7 @@ let connectionState = 'disconnected';
 let userPhone = null;
 
 const BASE_URL = 'https://web.whatsapp.com';
+const SESSION_DIR = path.join(os.homedir(), '.whatsapp-scheduler-session');
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -20,12 +23,20 @@ function log(message, level = 'info') {
 async function init(options = {}) {
   const headless = options.headless || process.env.HEADLESS === 'true';
   
+  // Ensure session directory exists
+  if (!fs.existsSync(SESSION_DIR)) {
+    fs.mkdirSync(SESSION_DIR, { recursive: true });
+    log(`Created session directory: ${SESSION_DIR}`);
+  }
+  
   log('Launching browser...');
   log(`Headless mode: ${headless}`);
+  log(`Session directory: ${SESSION_DIR}`);
   
   try {
     browser = await puppeteer.launch({
       headless,
+      userDataDir: SESSION_DIR,  // Persist session/cookies
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -50,10 +61,37 @@ async function init(options = {}) {
     });
     
     log('Waiting for page to load...');
-    await delay(3000);
+    await delay(5000);
     
     connectionState = 'connecting';
     
+    // Check if already logged in (session restored from userDataDir)
+    const alreadyLoggedIn = await page.evaluate(() => {
+      // Look for chat list - indicates successful login
+      const chatList = document.querySelector('#pane-side') || 
+                      document.querySelector('[data-testid="chat-list"]');
+      return !!chatList;
+    });
+    
+    if (alreadyLoggedIn) {
+      log('Already logged in! Session restored.', 'success');
+      connectionState = 'connected';
+      
+      // Get user info
+      const userInfo = await getUserInfo();
+      if (userInfo) {
+        userPhone = userInfo.phone;
+        log(`Logged in as: ${userInfo.name || userInfo.phone}`, 'success');
+      }
+      
+      return { 
+        success: true, 
+        method: 'session-restored',
+        message: 'Session restored from previous login'
+      };
+    }
+    
+    log('Not logged in, checking authentication options...');
     const result = await checkAuthOptions(options.phone);
     
     return result;
@@ -355,38 +393,6 @@ async function getQRCode() {
   }
 }
 
-async function enterPairingCode(code) {
-  if (!page) {
-    return { success: false, error: 'Not initialized' };
-  }
-  
-  log(`Entering pairing code: ${code}`);
-  
-  try {
-    const codeInput = await page.$('input[data-testid="link-code-input"]');
-    if (!codeInput) {
-      log('Pairing code input not found', 'error');
-      return { success: false, error: 'Pairing code input not found' };
-    }
-    
-    await codeInput.type(code, { delay: 100 });
-    await delay(1000);
-    
-    const verifyBtn = await page.$('button[data-testid="link-code-verify-btn"]');
-    if (verifyBtn) {
-      await verifyBtn.click();
-    }
-    
-    log('Waiting for connection...');
-    await waitForConnection();
-    
-    return { success: true };
-  } catch (err) {
-    log(`Enter code error: ${err.message}`, 'error');
-    return { success: false, error: err.message };
-  }
-}
-
 async function waitForConnection(timeout = 60000) {
   log('Waiting for WhatsApp connection...');
   
@@ -606,7 +612,6 @@ function isConnected() {
 export {
   init,
   getQRCode,
-  enterPairingCode,
   waitForConnection,
   getChats,
   sendMessage,
