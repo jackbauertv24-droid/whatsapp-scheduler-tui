@@ -403,6 +403,7 @@ async function waitForConnection(timeout = 60000) {
   log('Waiting for WhatsApp connection...');
   
   const startTime = Date.now();
+  let htmlSaveCount = 0;
   
   while (Date.now() - startTime < timeout) {
     try {
@@ -450,14 +451,23 @@ async function waitForConnection(timeout = 60000) {
       });
       
       // Log what we found for debugging
-      if (!result.connected) {
-        log(`Checking... indicators: ${result.indicators}, stillOnLogin: ${result.stillOnLogin}`);
+      log(`Checking... indicators: ${result.indicators}, stillOnLogin: ${result.stillOnLogin}, searchInput: ${result.searchInput}`);
+      
+      // Save HTML for debugging every 10 seconds
+      const elapsed = Math.floor((Date.now() - startTime) / 10000);
+      if (elapsed > htmlSaveCount) {
+        htmlSaveCount = elapsed;
+        await saveHTML(`connection-check-${htmlSaveCount}.html`);
+        log(`Body preview: ${result.bodyPreview}`, 'warn');
       }
       
       if (result.connected) {
         connectionState = 'connected';
         log('Connected to WhatsApp!', 'success');
         log(`Detected: pane=${result.paneSide}, chatList=${result.chatList}, search=${result.searchInput}, menu=${result.menuBtn}`);
+        
+        // Save HTML of successful connection
+        await saveHTML('connection-success.html');
         
         const userInfo = await getUserInfo();
         if (userInfo) {
@@ -476,6 +486,8 @@ async function waitForConnection(timeout = 60000) {
   }
   
   log('Connection timeout', 'error');
+  await saveHTML('connection-timeout.html');
+  await takeScreenshot('connection-timeout.png');
   connectionState = 'disconnected';
   return false;
 }
@@ -630,6 +642,22 @@ async function takeScreenshot(path = 'screenshot.png') {
   }
 }
 
+async function saveHTML(path = 'page-source.html') {
+  if (!page) {
+    return { success: false };
+  }
+  
+  try {
+    const html = await page.content();
+    fs.writeFileSync(path, html);
+    log(`HTML saved: ${path}`, 'success');
+    return { success: true, path };
+  } catch (err) {
+    log(`HTML save error: ${err.message}`, 'error');
+    return { success: false, error: err.message };
+  }
+}
+
 async function disconnect() {
   log('Disconnecting...');
   
@@ -669,5 +697,6 @@ export {
   getStatus,
   isConnected,
   takeScreenshot,
+  saveHTML,
   getUserInfo
 };
