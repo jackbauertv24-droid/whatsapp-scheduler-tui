@@ -200,16 +200,53 @@ async function pair(sessionId, phoneNumber = null, force = false) {
   return { success: false, status: 'pairing-timeout', message: 'QR not scanned in 120s', session: sessionId };
 }
 
-async function checkSession(sessionId) {
+async function checkSession(sessionId, timeout = 10) {
   await init(sessionId, true);
-  const result = {
-    success: true,
-    status: connectionState,
-    session: sessionId,
-    message: connectionState === 'connected' ? 'Session valid' : 'Session invalid, need to pair'
-  };
+  
+  if (connectionState === 'connected') {
+    await disconnect();
+    return {
+      success: true,
+      status: 'connected',
+      session: sessionId,
+      message: 'Session valid'
+    };
+  }
+  
+  // Wait for connection to establish (retry polling)
+  const startTime = Date.now();
+  const maxWaitMs = timeout * 1000;
+  
+  while (Date.now() - startTime < maxWaitMs) {
+    await delay(1000);
+    
+    const connected = await page.evaluate(() => {
+      const chatList = document.querySelector('#pane-side') || document.querySelector('[data-testid="chat-list"]');
+      return !!chatList;
+    });
+    
+    if (connected) {
+      connectionState = 'connected';
+      updateSession(sessionId, { status: 'connected' });
+      await disconnect();
+      return {
+        success: true,
+        status: 'connected',
+        session: sessionId,
+        message: 'Session valid (after retry)'
+      };
+    }
+  }
+  
+  // Timeout - still not connected
+  updateSession(sessionId, { status: 'not-logged-in' });
   await disconnect();
-  return result;
+  return {
+    success: true,
+    status: 'connecting',
+    session: sessionId,
+    message: `Session invalid after ${timeout}s timeout, need to pair`
+  };
 }
 
 async function listChats(sessionId) {
@@ -347,7 +384,8 @@ function parseArgs(args) {
     phone: null,
     force: false,
     to: null,
-    message: null
+    message: null,
+    timeout: 10
   };
   
   for (const arg of args) {
@@ -361,6 +399,8 @@ function parseArgs(args) {
       result.to = arg.split('=')[1];
     } else if (arg.startsWith('--message=')) {
       result.message = arg.split('=')[1];
+    } else if (arg.startsWith('--timeout=')) {
+      result.timeout = parseInt(arg.split('=')[1]) || 10;
     }
   }
   
@@ -380,7 +420,7 @@ async function main() {
       break;
       
     case 'check':
-      output(await checkSession(parsed.session));
+      output(await checkSession(parsed.session, parsed.timeout));
       break;
       
     case 'list':
@@ -418,8 +458,8 @@ Usage:
   node cli.js pair [--session=<id>] [--phone=+1234567890] [--force]
     Pair session (pairing code or QR). --force clears existing session.
   
-  node cli.js check [--session=<id>]
-    Check if session is valid
+  node cli.js check [--session=<id>] [--timeout=10]
+    Check if session is valid. --timeout sets retry wait seconds (default 10).
   
   node cli.js list [--session=<id>]
     List contacts/groups
