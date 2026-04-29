@@ -249,8 +249,31 @@ async function checkSession(sessionId, timeout = 10) {
   };
 }
 
-async function listChats(sessionId) {
+async function listChats(sessionId, timeout = 10) {
   await init(sessionId, true);
+  
+  // Wait for connection to establish (retry polling)
+  const startTime = Date.now();
+  const maxWaitMs = timeout * 1000;
+  
+  while (Date.now() - startTime < maxWaitMs) {
+    if (connectionState === 'connected') {
+      break;
+    }
+    
+    await delay(1000);
+    
+    const connected = await page.evaluate(() => {
+      const chatList = document.querySelector('#pane-side') || document.querySelector('[data-testid="chat-list"]');
+      return !!chatList;
+    });
+    
+    if (connected) {
+      connectionState = 'connected';
+      updateSession(sessionId, { status: 'connected' });
+      break;
+    }
+  }
   
   if (connectionState !== 'connected') {
     await disconnect();
@@ -285,8 +308,31 @@ async function listChats(sessionId) {
   return { success: true, chats, session: sessionId };
 }
 
-async function sendMessage(sessionId, to, message) {
+async function sendMessage(sessionId, to, message, timeout = 10) {
   await init(sessionId, true);
+  
+  // Wait for connection to establish (retry polling)
+  const startTime = Date.now();
+  const maxWaitMs = timeout * 1000;
+  
+  while (Date.now() - startTime < maxWaitMs) {
+    if (connectionState === 'connected') {
+      break;
+    }
+    
+    await delay(1000);
+    
+    const connected = await page.evaluate(() => {
+      const chatList = document.querySelector('#pane-side') || document.querySelector('[data-testid="chat-list"]');
+      return !!chatList;
+    });
+    
+    if (connected) {
+      connectionState = 'connected';
+      updateSession(sessionId, { status: 'connected' });
+      break;
+    }
+  }
   
   if (connectionState !== 'connected') {
     await disconnect();
@@ -424,7 +470,7 @@ async function main() {
       break;
       
     case 'list':
-      output(await listChats(parsed.session));
+      output(await listChats(parsed.session, parsed.timeout));
       break;
       
     case 'send':
@@ -432,7 +478,7 @@ async function main() {
         output({ success: false, error: 'Usage: send --to="+1234567890" --message="Hello"', session: parsed.session });
         break;
       }
-      output(await sendMessage(parsed.session, parsed.to, parsed.message));
+      output(await sendMessage(parsed.session, parsed.to, parsed.message, parsed.timeout));
       break;
       
     case 'sessions':
@@ -461,11 +507,11 @@ Usage:
   node cli.js check [--session=<id>] [--timeout=10]
     Check if session is valid. --timeout sets retry wait seconds (default 10).
   
-  node cli.js list [--session=<id>]
-    List contacts/groups
+  node cli.js list [--session=<id>] [--timeout=10]
+    List contacts/groups. --timeout sets retry wait seconds (default 10).
   
-  node cli.js send [--session=<id>] --to="+1234567890" --message="Hello"
-    Send message
+  node cli.js send [--session=<id>] --to="+1234567890" --message="Hello" [--timeout=10]
+    Send message. --timeout sets retry wait seconds (default 10).
   
   node cli.js sessions
     List all sessions
