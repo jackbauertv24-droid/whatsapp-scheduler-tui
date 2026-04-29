@@ -793,17 +793,34 @@ async function sendMessage(jid, content) {
     await searchInput.type(searchTerm, { delay: 30 });
     await delay(2000);
     
+    // Wait for search results to appear
+    log('Waiting for search results...');
+    try {
+      await page.waitForSelector('[data-testid="list-item-1"]', { timeout: 5000 });
+      log('Search results appeared', 'success');
+    } catch (e) {
+      log('No search results found', 'warn');
+    }
+    
     // Save after search
     const afterSearchHtml = await page.content();
     fs.writeFileSync('sendmessage-after-search.html', afterSearchHtml);
     log('Saved: sendmessage-after-search.html', 'warn');
     
-    // Find chat result
+    // Log what we found in search
+    const searchResultCount = await page.evaluate(() => {
+      const items = document.querySelectorAll('[data-testid^="list-item-"]');
+      return items.length;
+    });
+    log(`Search returned ${searchResultCount} items (including section headers)`, 'warn');
+    
+    // Find chat result - look for gridcell inside list-item
     const chatSelectors = [
-      '[data-testid^="list-item-"]',  // list-item-0, list-item-1, etc.
-      '[data-testid="list-item-0"]',
-      '#pane-side div[aria-selected="false"]',
-      '#pane-side div[tabindex="-1"]'
+      '[data-testid="list-item-1"] div[role="gridcell"]',  // First search result
+      '[data-testid^="list-item-"] div[role="gridcell"]',  // Any list item gridcell
+      '#pane-side div[role="gridcell"][tabindex="0"]',     // Any clickable gridcell
+      '[data-testid="list-item-1"]',                       // The list-item itself
+      '#pane-side div[aria-selected]'                      // Any selectable item
     ];
     
     let chatElement = null;
@@ -844,11 +861,41 @@ async function sendMessage(jid, content) {
     
     // Click the chat using evaluate (more reliable than puppeteer click)
     log('Clicking chat element...');
-    await chatElement.evaluate(el => el.click());
+    await chatElement.evaluate(el => {
+      // Try clicking the element and also dispatch mouse event
+      el.click();
+      el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
     log('Clicked chat (via evaluate)');
     await delay(2000);
     
-    // Save after chat opened
+    // Wait for chat panel to open - look for #main or conversation panel
+    log('Waiting for chat to open...');
+    const chatOpened = await page.waitForSelector('#main, [data-testid="conversation-panel-wrapper"]', { timeout: 5000 }).catch(() => null);
+    
+    if (!chatOpened) {
+      log('Chat panel did not open after click', 'error');
+      
+      // Try double-click or alternative click
+      log('Trying alternative click method...', 'warn');
+      await chatElement.evaluate(el => {
+        el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+        el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+        el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+      await delay(2000);
+      
+      const retryOpened = await page.waitForSelector('#main, [data-testid="conversation-panel-wrapper"]', { timeout: 3000 }).catch(() => null);
+      if (!retryOpened) {
+        log('Still not opened', 'error');
+      }
+    }
+    
+    // Verify chat is open by checking for main panel
+    const mainPanel = await page.$('#main');
+    log(`Main panel found: ${!!mainPanel}`, mainPanel ? 'success' : 'warn');
+    
+    // Save after chat opened (or failed)
     const chatOpenedHtml = await page.content();
     fs.writeFileSync('sendmessage-chat-opened.html', chatOpenedHtml);
     log('Saved: sendmessage-chat-opened.html', 'warn');
