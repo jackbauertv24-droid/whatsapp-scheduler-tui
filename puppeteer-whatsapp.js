@@ -651,62 +651,39 @@ async function getChats() {
       const pane = document.querySelector('#pane-side');
       if (!pane) return [];
       
+      // Get all testIds for analysis
       const allTestIds = Array.from(pane.querySelectorAll('[data-testid]')).map(el => ({
         testId: el.getAttribute('data-testid'),
         tagName: el.tagName,
         text: (el.textContent || '').substring(0, 30)
       }));
       
-      // Try to find chat items using various methods
-      let chatElements = [];
-      
-      // Method 1: data-testid="chat-list-item"
-      chatElements = Array.from(pane.querySelectorAll('[data-testid="chat-list-item"]'));
-      
-      // Method 2: if not found, try div[data-id] (contains JID)
-      if (chatElements.length === 0) {
-        chatElements = Array.from(pane.querySelectorAll('div[data-id]')).filter(el => {
-          const id = el.getAttribute('data-id') || '';
-          return id.includes('@') || id.includes('.whatsapp.net');
-        });
-      }
-      
-      // Method 3: try tabindex="-1" elements (clickable items)
-      if (chatElements.length === 0) {
-        chatElements = Array.from(pane.querySelectorAll('div[tabindex="-1"]'));
-      }
-      
-      // Method 4: try role="listitem"
-      if (chatElements.length === 0) {
-        chatElements = Array.from(pane.querySelectorAll('[role="listitem"]'));
-      }
+      // Chat items are list-item-N (list-item-0, list-item-1, etc.)
+      const chatElements = Array.from(pane.querySelectorAll('[data-testid^="list-item-"]'));
       
       // Extract chat info
       const chats = chatElements.slice(0, 20).map((el, index) => {
-        // Get title - try multiple selectors
-        const titleEl = el.querySelector('[data-testid="chat-title"]') ||
-                       el.querySelector('span[dir="auto"]') ||
-                       el.querySelector('span[title]') ||
-                       el.querySelector('span');
-        const title = titleEl ? (titleEl.textContent || titleEl.getAttribute('title') || '').trim() : `Chat ${index}`;
+        // Title is in cell-frame-title
+        const titleEl = el.querySelector('[data-testid="cell-frame-title"]');
+        const title = titleEl ? (titleEl.textContent || '').trim() : `Chat ${index}`;
         
-        // Get JID
-        const jid = el.getAttribute('data-id') || '';
-        
-        // Detect group by icon or text
-        const groupIcon = el.querySelector('[data-testid="default-group"]') ||
-                         el.querySelector('[data-testid="zt1"]') ||
-                         el.querySelector('svg');
+        // Detect group vs contact
+        const groupIcon = el.querySelector('[data-testid="default-group-refreshed"]');
         const isGroup = !!groupIcon;
         
+        // Try to get JID - look for data-id attribute
+        const parentWithId = el.closest('[data-id]') || el.querySelector('[data-id]');
+        const jid = parentWithId ? parentWithId.getAttribute('data-id') : '';
+        
         // Save outerHTML for debugging first few items
-        const debugHtml = index < 3 ? el.outerHTML.substring(0, 300) : '';
+        const debugHtml = index < 3 ? el.outerHTML.substring(0, 500) : '';
         
         return {
           id: jid,
           name: title,
           isGroup,
           jid: jid || `${title.replace(/\s+/g, '')}@s.whatsapp.net`,
+          testId: el.getAttribute('data-testid'),
           debugHtml
         };
       });
@@ -757,10 +734,11 @@ async function sendMessage(jid, content) {
     
     // Find search input - try multiple selectors
     const searchSelectors = [
-      '[data-testid="chat-list-search"]',
-      'div[role="textbox"]',
-      'input[type="text"]',
-      '[placeholder*="Search"]'
+      '[data-testid="chat-list-search-container"] input',
+      '[data-testid="chat-list-search-container"]',
+      'div[role="textbox"][data-testid="chat-list-search"]',
+      '#pane-side input',
+      '#pane-side div[contenteditable="true"]'
     ];
     
     let searchInput = null;
@@ -822,9 +800,10 @@ async function sendMessage(jid, content) {
     
     // Find chat result
     const chatSelectors = [
-      '[data-testid="chat-list-item"]',
-      'div[data-id]',
-      'div[tabindex="-1"]'
+      '[data-testid^="list-item-"]',  // list-item-0, list-item-1, etc.
+      '[data-testid="list-item-0"]',
+      '#pane-side div[aria-selected="false"]',
+      '#pane-side div[tabindex="-1"]'
     ];
     
     let chatElement = null;
@@ -844,38 +823,47 @@ async function sendMessage(jid, content) {
         const pane = document.querySelector('#pane-side');
         if (!pane) return { paneFound: false };
         
-        const items = pane.querySelectorAll('div[tabindex="-1"], div[data-id]');
+        const items = pane.querySelectorAll('[data-testid^="list-item-"]');
         return {
           paneFound: true,
           itemCount: items.length,
           items: Array.from(items).slice(0, 5).map(el => ({
-            outerHTML: el.outerHTML.substring(0, 200),
-            dataId: el.getAttribute('data-id') || 'none'
+            testId: el.getAttribute('data-testid'),
+            title: el.querySelector('[data-testid="cell-frame-title"]')?.textContent || 'unknown',
+            outerHTML: el.outerHTML.substring(0, 200)
           }))
         };
       });
       
       fs.writeFileSync('sendmessage-chat-analysis.json', JSON.stringify(resultAnalysis, null, 2));
       log('Saved: sendmessage-chat-analysis.json', 'warn');
+      log(`Found ${resultAnalysis.itemCount} chat items in pane`, 'warn');
       
       return { success: false, error: 'Chat not found in results' };
     }
     
-    await chatElement.click();
-    log('Clicked chat');
-    await delay(1000);
+    // Click the chat using evaluate (more reliable than puppeteer click)
+    log('Clicking chat element...');
+    await chatElement.evaluate(el => el.click());
+    log('Clicked chat (via evaluate)');
+    await delay(2000);
     
     // Save after chat opened
     const chatOpenedHtml = await page.content();
     fs.writeFileSync('sendmessage-chat-opened.html', chatOpenedHtml);
     log('Saved: sendmessage-chat-opened.html', 'warn');
     
-    // Find message input
+    // Find message input - wait for chat to fully load
+    log('Waiting for message compose area...');
+    await delay(1000);
+    
     const msgInputSelectors = [
+      'footer [data-testid="conversation-compose-box-input"]',
+      'footer div[contenteditable="true"]',
       '[data-testid="conversation-compose-box-input"]',
-      'div[contenteditable="true"]',
-      'footer div[role="textbox"]',
-      '[data-testid="compose-box"] div[contenteditable="true"]'
+      'div[contenteditable="true"][role="textbox"]',
+      '#main footer div[contenteditable="true"]',
+      'div[data-testid="compose-box"] div[contenteditable="true"]'
     ];
     
     let messageInput = null;
@@ -892,23 +880,32 @@ async function sendMessage(jid, content) {
       log('Message input not found', 'error');
       
       const footerAnalysis = await page.evaluate(() => {
+        // Check for main panel (chat content area)
+        const main = document.querySelector('#main');
         const footer = document.querySelector('footer');
-        if (!footer) return { footerFound: false };
         
-        const editable = footer.querySelectorAll('[contenteditable="true"], div[role="textbox"]');
+        // Check all contenteditable elements
+        const editable = document.querySelectorAll('[contenteditable="true"]');
+        
+        // Get all testIds in main and footer areas
+        const mainTestIds = main ? Array.from(main.querySelectorAll('[data-testid]')).map(el => el.getAttribute('data-testid')) : [];
+        const footerTestIds = footer ? Array.from(footer.querySelectorAll('[data-testid]')).map(el => el.getAttribute('data-testid')) : [];
+        
         return {
-          footerFound: true,
+          mainFound: !!main,
+          footerFound: !!footer,
           editableCount: editable.length,
-          editable: Array.from(editable).map(el => ({
-            testId: el.getAttribute('data-testid') || 'none',
-            role: el.getAttribute('role') || 'none',
-            outerHTML: el.outerHTML.substring(0, 150)
-          }))
+          editableTestIds: Array.from(editable).map(el => el.getAttribute('data-testid') || 'no-testid'),
+          mainTestIds: mainTestIds.slice(0, 20),
+          footerTestIds: footerTestIds.slice(0, 20),
+          bodyPreview: document.body.innerText.substring(0, 300)
         };
       });
       
       fs.writeFileSync('sendmessage-footer-analysis.json', JSON.stringify(footerAnalysis, null, 2));
       log('Saved: sendmessage-footer-analysis.json', 'warn');
+      log(`main=${footerAnalysis.mainFound}, footer=${footerAnalysis.footerFound}, editable=${footerAnalysis.editableCount}`, 'warn');
+      log(`TestIds in main: ${footerAnalysis.mainTestIds.join(', ')}`, 'warn');
       
       return { success: false, error: 'Message input not found' };
     }
@@ -923,9 +920,10 @@ async function sendMessage(jid, content) {
     // Find send button
     const sendSelectors = [
       '[data-testid="compose-btn-send"]',
-      'button[data-testid="send"]',
-      'button[type="submit"]',
-      'button span[data-testid="send"]'
+      'footer button[data-testid="send"]',
+      'button[aria-label="Send"]',
+      'button[data-testid*="send"]',
+      'footer button[type="button"]'
     ];
     
     let sendBtn = null;
