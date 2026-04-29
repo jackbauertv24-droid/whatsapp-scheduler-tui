@@ -592,96 +592,149 @@ async function getChats() {
   }
   
   log('Fetching chats...');
-  await saveHTML('getchats-before.html');
   
   try {
+    // Save current page state for analysis
+    const html = await page.content();
+    fs.writeFileSync('chats-page-state.html', html);
+    log('Saved: chats-page-state.html (for selector analysis)', 'warn');
+    
     // Wait for chat list to appear
     log('Waiting for pane-side...');
     const paneFound = await page.waitForSelector('#pane-side', { timeout: 10000 }).catch(() => null);
     
     if (!paneFound) {
-      log('pane-side not found, trying alternative selectors', 'warn');
-      await saveHTML('getchats-no-pane.html');
+      log('pane-side not found', 'error');
       
-      // Try alternative: look for any chat-related elements
-      const altResult = await page.evaluate(() => {
+      // Extract all data-testid attributes for analysis
+      const testIdsResult = await page.evaluate(() => {
         const allElements = document.querySelectorAll('[data-testid]');
-        const testIds = Array.from(allElements).map(el => el.getAttribute('data-testid')).filter(id => id);
-        return { testIds, bodyText: document.body.innerText.substring(0, 500) };
+        const testIds = Array.from(allElements).map(el => ({
+          testId: el.getAttribute('data-testid'),
+          tagName: el.tagName,
+          className: el.className.substring(0, 30),
+          text: (el.textContent || '').substring(0, 50)
+        }));
+        
+        // Also find all elements that look like chat items
+        const possibleChats = document.querySelectorAll('div[tabindex="-1"]');
+        const chatCandidates = Array.from(possibleChats).slice(0, 10).map(el => ({
+          outerHTML: el.outerHTML.substring(0, 200),
+          text: (el.textContent || '').substring(0, 100)
+        }));
+        
+        return { testIds, chatCandidates, bodyPreview: document.body.innerText.substring(0, 500) };
       });
       
-      log(`Available testIds: ${altResult.testIds.join(', ')}`, 'warn');
-      log(`Body: ${altResult.bodyText}`, 'warn');
+      log(`Found ${testIdsResult.testIds.length} elements with data-testid`, 'warn');
+      log(`testIds: ${testIdsResult.testIds.map(t => t.testId).join(', ')}`, 'warn');
       
-      return { success: false, error: 'Chat list not found', chats: [], testIds: altResult.testIds };
+      // Save full analysis
+      fs.writeFileSync('chats-analysis.json', JSON.stringify(testIdsResult, null, 2));
+      log('Saved: chats-analysis.json', 'warn');
+      
+      return { success: false, error: 'pane-side not found', testIds: testIdsResult.testIds, chats: [] };
     }
     
     log('pane-side found, extracting chats...');
     
+    // Save pane-side HTML for analysis
+    const paneHtml = await page.evaluate(() => {
+      const pane = document.querySelector('#pane-side');
+      return pane ? pane.outerHTML : 'pane not found in evaluate';
+    });
+    fs.writeFileSync('chats-pane-side.html', paneHtml);
+    log('Saved: chats-pane-side.html', 'warn');
+    
     const chats = await page.evaluate(() => {
-      // Try multiple selectors for chat items
-      const selectors = [
-        '[data-testid="chat-list-item"]',
-        'div[data-id]',
-        '[role="listitem"]',
-        'div[tabindex="-1"][class*="chat"]'
-      ];
+      // Get all elements with data-testid in pane-side
+      const pane = document.querySelector('#pane-side');
+      if (!pane) return [];
       
+      const allTestIds = Array.from(pane.querySelectorAll('[data-testid]')).map(el => ({
+        testId: el.getAttribute('data-testid'),
+        tagName: el.tagName,
+        text: (el.textContent || '').substring(0, 30)
+      }));
+      
+      // Try to find chat items using various methods
       let chatElements = [];
-      for (const sel of selectors) {
-        const found = document.querySelectorAll(sel);
-        if (found.length > 0) {
-          chatElements = Array.from(found);
-          console.log(`Selector ${sel} found ${found.length} elements`);
-          break;
-        }
-      }
       
+      // Method 1: data-testid="chat-list-item"
+      chatElements = Array.from(pane.querySelectorAll('[data-testid="chat-list-item"]'));
+      
+      // Method 2: if not found, try div[data-id] (contains JID)
       if (chatElements.length === 0) {
-        // Fallback: scan all clickable elements in pane-side
-        const pane = document.querySelector('#pane-side');
-        if (pane) {
-          chatElements = Array.from(pane.querySelectorAll('div[tabindex="-1"], div[role="button"]'))
-            .filter(el => el.querySelector('span')); // Has text
-        }
+        chatElements = Array.from(pane.querySelectorAll('div[data-id]')).filter(el => {
+          const id = el.getAttribute('data-id') || '';
+          return id.includes('@') || id.includes('.whatsapp.net');
+        });
       }
       
-      return Array.from(chatElements).slice(0, 20).map(el => {
-        // Try multiple ways to get title
+      // Method 3: try tabindex="-1" elements (clickable items)
+      if (chatElements.length === 0) {
+        chatElements = Array.from(pane.querySelectorAll('div[tabindex="-1"]'));
+      }
+      
+      // Method 4: try role="listitem"
+      if (chatElements.length === 0) {
+        chatElements = Array.from(pane.querySelectorAll('[role="listitem"]'));
+      }
+      
+      // Extract chat info
+      const chats = chatElements.slice(0, 20).map((el, index) => {
+        // Get title - try multiple selectors
         const titleEl = el.querySelector('[data-testid="chat-title"]') ||
                        el.querySelector('span[dir="auto"]') ||
-                       el.querySelector('span[title]');
-        const title = titleEl ? titleEl.textContent || titleEl.getAttribute('title') : 'Unknown';
+                       el.querySelector('span[title]') ||
+                       el.querySelector('span');
+        const title = titleEl ? (titleEl.textContent || titleEl.getAttribute('title') || '').trim() : `Chat ${index}`;
         
         // Get JID
         const jid = el.getAttribute('data-id') || '';
         
-        // Detect group
+        // Detect group by icon or text
         const groupIcon = el.querySelector('[data-testid="default-group"]') ||
-                         el.querySelector('[data-testid="zt1"]');
+                         el.querySelector('[data-testid="zt1"]') ||
+                         el.querySelector('svg');
         const isGroup = !!groupIcon;
+        
+        // Save outerHTML for debugging first few items
+        const debugHtml = index < 3 ? el.outerHTML.substring(0, 300) : '';
         
         return {
           id: jid,
-          name: title.trim(),
+          name: title,
           isGroup,
-          jid: jid || `${title.trim().replace(/\s/g, '')}@s.whatsapp.net`
+          jid: jid || `${title.replace(/\s+/g, '')}@s.whatsapp.net`,
+          debugHtml
         };
       });
+      
+      return { chats, allTestIds };
     });
     
-    log(`Found ${chats.length} chats`, 'success');
-    await saveHTML('getchats-result.html');
+    // Save full extraction result
+    fs.writeFileSync('chats-extracted.json', JSON.stringify(chats, null, 2));
+    log('Saved: chats-extracted.json', 'warn');
     
-    if (chats.length === 0) {
-      log('No chats extracted, check getchats-result.html', 'warn');
+    log(`Found ${chats.chats.length} chats`, 'success');
+    log(`allTestIds in pane: ${chats.allTestIds.map(t => t.testId).join(', ')}`, 'warn');
+    
+    if (chats.chats.length > 0) {
+      chats.chats.slice(0, 3).forEach(chat => {
+        if (chat.debugHtml) log(`Chat debug: ${chat.debugHtml}`, 'warn');
+      });
     }
     
-    return { success: true, chats };
+    return { success: true, chats: chats.chats };
   } catch (err) {
     log(`Get chats error: ${err.message}`, 'error');
-    await saveHTML('getchats-error.html');
-    await takeScreenshot('getchats-error.png');
+    const errorHtml = await page.content();
+    fs.writeFileSync('chats-error.html', errorHtml);
+    fs.writeFileSync('chats-error.json', JSON.stringify({ error: err.message, stack: err.stack }));
+    log('Saved: chats-error.html, chats-error.json', 'error');
+    await takeScreenshot('chats-error.png');
     return { success: false, error: err.message, chats: [] };
   }
 }
@@ -693,131 +746,219 @@ async function sendMessage(jid, content) {
   }
   
   log(`Sending message to: ${jid}`);
-  await saveHTML('sendmessage-start.html');
   
   try {
+    // Save current state
+    const startHtml = await page.content();
+    fs.writeFileSync('sendmessage-start.html', startHtml);
+    log('Saved: sendmessage-start.html', 'warn');
+    
     await delay(500);
     
-    // Find search input
-    const searchInput = await page.$('[data-testid="chat-list-search"]');
-    log(`Search input found: ${!!searchInput}`);
+    // Find search input - try multiple selectors
+    const searchSelectors = [
+      '[data-testid="chat-list-search"]',
+      'div[role="textbox"]',
+      'input[type="text"]',
+      '[placeholder*="Search"]'
+    ];
     
-    if (searchInput) {
-      // Use the chat name or JID to search
-      const searchTerm = jid.split('@')[0];
-      log(`Searching for: ${searchTerm}`);
-      
-      await searchInput.click();
-      await delay(100);
-      await searchInput.type(searchTerm, { delay: 30 });
-      await delay(2000);
-      
-      await saveHTML('sendmessage-after-search.html');
-      
-      // Click first result
-      const firstChat = await page.$('[data-testid="chat-list-item"]');
-      log(`First chat result: ${!!firstChat}`);
-      
-      if (firstChat) {
-        await firstChat.click();
-        log('Clicked chat');
-        await delay(1000);
-      } else {
-        // Try alternative selectors
-        const altChat = await page.evaluate(() => {
-          const pane = document.querySelector('#pane-side');
-          if (pane) {
-            const items = pane.querySelectorAll('div[tabindex="-1"]');
-            if (items.length > 0) {
-              items[0].click();
-              return true;
-            }
-          }
-          return false;
-        });
-        
-        if (!altChat) {
-          log('Chat not found in list', 'warn');
-          await saveHTML('sendmessage-no-chat.html');
-          return { success: false, error: 'Chat not found' };
-        }
-        log('Clicked chat using alternative selector');
+    let searchInput = null;
+    let searchSelectorUsed = '';
+    
+    for (const sel of searchSelectors) {
+      searchInput = await page.$(sel);
+      if (searchInput) {
+        searchSelectorUsed = sel;
+        log(`Search input found with: ${sel}`, 'success');
+        break;
       }
     }
     
-    await saveHTML('sendmessage-chat-opened.html');
-    
-    // Wait for message input
-    log('Waiting for message input...');
-    const inputFound = await page.waitForSelector('[data-testid="conversation-compose-box-input"]', { timeout: 5000 }).catch(() => null);
-    
-    if (!inputFound) {
-      log('Message input not found with primary selector', 'warn');
+    if (!searchInput) {
+      log('Search input not found with any selector', 'error');
       
-      // Try alternative selectors for message input
-      const altInput = await page.evaluate(() => {
-        const selectors = [
-          '[data-testid="conversation-compose-box-input"]',
-          'div[role="textbox"]',
-          'footer div[contenteditable="true"]',
-          'div[data-testid="compose-box"] div[contenteditable="true"]'
-        ];
-        
-        for (const sel of selectors) {
-          const el = document.querySelector(sel);
-          if (el) {
-            console.log('Found input with:', sel);
-            return { found: true, selector: sel };
-          }
-        }
-        return { found: false };
+      // Extract all possible input elements for analysis
+      const inputAnalysis = await page.evaluate(() => {
+        const inputs = document.querySelectorAll('input, div[role="textbox"], [contenteditable="true"]');
+        return Array.from(inputs).map(el => ({
+          tagName: el.tagName,
+          type: el.type || 'none',
+          role: el.getAttribute('role') || 'none',
+          placeholder: el.placeholder || el.getAttribute('placeholder') || 'none',
+          testId: el.getAttribute('data-testid') || 'none',
+          className: el.className.substring(0, 50),
+          outerHTML: el.outerHTML.substring(0, 150)
+        }));
       });
       
-      log(`Alternative input search: ${JSON.stringify(altInput)}`);
-      await saveHTML('sendmessage-no-input.html');
+      fs.writeFileSync('sendmessage-input-analysis.json', JSON.stringify(inputAnalysis, null, 2));
+      log('Saved: sendmessage-input-analysis.json', 'warn');
+      log(`Found ${inputAnalysis.length} possible input elements`, 'warn');
       
-      if (!altInput.found) {
-        return { success: false, error: 'Message input not found' };
+      return { success: false, error: 'Search input not found' };
+    }
+    
+    // Search for chat
+    const searchTerm = jid.split('@')[0];
+    log(`Searching for: ${searchTerm}`);
+    
+    await searchInput.click();
+    await delay(100);
+    
+    // Clear and type
+    await page.keyboard.down('Control');
+    await searchInput.press('a');
+    await page.keyboard.up('Control');
+    await delay(100);
+    
+    await searchInput.type(searchTerm, { delay: 30 });
+    await delay(2000);
+    
+    // Save after search
+    const afterSearchHtml = await page.content();
+    fs.writeFileSync('sendmessage-after-search.html', afterSearchHtml);
+    log('Saved: sendmessage-after-search.html', 'warn');
+    
+    // Find chat result
+    const chatSelectors = [
+      '[data-testid="chat-list-item"]',
+      'div[data-id]',
+      'div[tabindex="-1"]'
+    ];
+    
+    let chatElement = null;
+    
+    for (const sel of chatSelectors) {
+      chatElement = await page.$(sel);
+      if (chatElement) {
+        log(`Chat found with: ${sel}`, 'success');
+        break;
       }
     }
     
-    // Get input box
-    const inputBox = await page.$('[data-testid="conversation-compose-box-input"]') ||
-                     await page.$('div[contenteditable="true"]');
-    
-    if (!inputBox) {
-      log('Message input not found', 'error');
-      return { success: false, error: 'Input not found' };
+    if (!chatElement) {
+      log('Chat result not found', 'error');
+      
+      const resultAnalysis = await page.evaluate(() => {
+        const pane = document.querySelector('#pane-side');
+        if (!pane) return { paneFound: false };
+        
+        const items = pane.querySelectorAll('div[tabindex="-1"], div[data-id]');
+        return {
+          paneFound: true,
+          itemCount: items.length,
+          items: Array.from(items).slice(0, 5).map(el => ({
+            outerHTML: el.outerHTML.substring(0, 200),
+            dataId: el.getAttribute('data-id') || 'none'
+          }))
+        };
+      });
+      
+      fs.writeFileSync('sendmessage-chat-analysis.json', JSON.stringify(resultAnalysis, null, 2));
+      log('Saved: sendmessage-chat-analysis.json', 'warn');
+      
+      return { success: false, error: 'Chat not found in results' };
     }
     
+    await chatElement.click();
+    log('Clicked chat');
+    await delay(1000);
+    
+    // Save after chat opened
+    const chatOpenedHtml = await page.content();
+    fs.writeFileSync('sendmessage-chat-opened.html', chatOpenedHtml);
+    log('Saved: sendmessage-chat-opened.html', 'warn');
+    
+    // Find message input
+    const msgInputSelectors = [
+      '[data-testid="conversation-compose-box-input"]',
+      'div[contenteditable="true"]',
+      'footer div[role="textbox"]',
+      '[data-testid="compose-box"] div[contenteditable="true"]'
+    ];
+    
+    let messageInput = null;
+    
+    for (const sel of msgInputSelectors) {
+      messageInput = await page.$(sel);
+      if (messageInput) {
+        log(`Message input found with: ${sel}`, 'success');
+        break;
+      }
+    }
+    
+    if (!messageInput) {
+      log('Message input not found', 'error');
+      
+      const footerAnalysis = await page.evaluate(() => {
+        const footer = document.querySelector('footer');
+        if (!footer) return { footerFound: false };
+        
+        const editable = footer.querySelectorAll('[contenteditable="true"], div[role="textbox"]');
+        return {
+          footerFound: true,
+          editableCount: editable.length,
+          editable: Array.from(editable).map(el => ({
+            testId: el.getAttribute('data-testid') || 'none',
+            role: el.getAttribute('role') || 'none',
+            outerHTML: el.outerHTML.substring(0, 150)
+          }))
+        };
+      });
+      
+      fs.writeFileSync('sendmessage-footer-analysis.json', JSON.stringify(footerAnalysis, null, 2));
+      log('Saved: sendmessage-footer-analysis.json', 'warn');
+      
+      return { success: false, error: 'Message input not found' };
+    }
+    
+    // Type message
     log('Typing message...');
-    await inputBox.focus();
+    await messageInput.focus();
     await delay(100);
-    await inputBox.type(content, { delay: 20 });
+    await messageInput.type(content, { delay: 20 });
     await delay(300);
     
-    await saveHTML('sendmessage-message-typed.html');
-    
     // Find send button
-    const sendBtn = await page.$('[data-testid="compose-btn-send"]') ||
-                    await page.$('button[data-testid="send"]');
-    log(`Send button found: ${!!sendBtn}`);
+    const sendSelectors = [
+      '[data-testid="compose-btn-send"]',
+      'button[data-testid="send"]',
+      'button[type="submit"]',
+      'button span[data-testid="send"]'
+    ];
+    
+    let sendBtn = null;
+    
+    for (const sel of sendSelectors) {
+      sendBtn = await page.$(sel);
+      if (sendBtn) {
+        log(`Send button found with: ${sel}`, 'success');
+        break;
+      }
+    }
     
     if (sendBtn) {
       await sendBtn.click();
       log('Message sent via button', 'success');
     } else {
       await page.keyboard.press('Enter');
-      log('Message sent via Enter', 'success');
+      log('Message sent via Enter key', 'success');
     }
     
     await delay(1000);
-    await saveHTML('sendmessage-sent.html');
+    
+    const sentHtml = await page.content();
+    fs.writeFileSync('sendmessage-sent.html', sentHtml);
+    log('Saved: sendmessage-sent.html', 'warn');
     
     return { success: true };
   } catch (err) {
     log(`Send error: ${err.message}`, 'error');
-    await saveHTML('sendmessage-error.html');
+    const errorHtml = await page.content();
+    fs.writeFileSync('sendmessage-error.html', errorHtml);
+    fs.writeFileSync('sendmessage-error.json', JSON.stringify({ error: err.message, stack: err.stack }));
+    log('Saved: sendmessage-error.html, sendmessage-error.json', 'error');
     await takeScreenshot('sendmessage-error.png');
     return { success: false, error: err.message };
   }
