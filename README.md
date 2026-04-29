@@ -1,21 +1,8 @@
-# WhatsApp Scheduler TUI (Puppeteer)
+# WhatsApp Scheduler TUI
 
-A terminal-based testing tool for WhatsApp Web automation using Puppeteer.
-
-## Why Puppeteer?
-
-This version uses Puppeteer to control a real browser accessing WhatsApp Web:
-- **Legitimate browser context** - WhatsApp sees it as a real user
-- **Pairing code OR QR code** - Checks if pairing code option is available
-- **Visible logging** - All actions logged to terminal
-- **Screenshots** - Debug what's happening in the browser
-
-## Purpose
-
-- Test if WhatsApp Web works from your IP
-- Debug authentication flow
-- Check for pairing code availability on WhatsApp Web
-- Test chat/message functionality
+WhatsApp Web automation tool with two modes:
+1. **TUI (Interactive)** - Terminal menu for manual testing
+2. **CLI (Non-interactive)** - JSON output for LLMs and scheduling tools
 
 ## Installation
 
@@ -23,94 +10,122 @@ This version uses Puppeteer to control a real browser accessing WhatsApp Web:
 npm install
 ```
 
-## Usage
+## Mode 1: TUI (Interactive)
 
 ```bash
 npm start
 ```
 
-For headless mode (no visible browser):
+Menu options:
+- `[1] Login` - Pair session (pairing code or QR)
+- `[2] Status` - View connection state
+- `[3] Screenshot` - Debug browser state
+- `[4] HTML Source` - Save page HTML for analysis
+- `[5] List Chats` - Fetch contacts/groups
+- `[6] Send Message` - Send test message
+- `[7] Logout` - Close browser
+- `[0] Exit`
+
+## Mode 2: CLI (Non-interactive)
+
+For LLMs, cron jobs, and automation. Output is JSON.
+
+### Commands
+
 ```bash
-npm run start:headless
+# Pair session (opens browser window for pairing)
+node cli.js pair [--phone=+1234567890]
+
+# Check if session is valid
+node cli.js check
+
+# List contacts/groups
+node cli.js list
+
+# Send message
+node cli.js send --to="+1234567890" --message="Hello from CLI"
+
+# Help
+node cli.js help
 ```
 
-### Menu
+### NPM Scripts
 
-```
-[1] Login - Authenticate (pairing code or QR)
-[2] Show Status - View connection details
-[3] Take Screenshot - Debug browser state
-[4] List Chats - Fetch recent chats
-[5] Send Test Message - Send a message
-[6] Logout - Close browser
-[0] Exit
-```
-
-### Login Flow
-
-**Option A: Pairing Code (if available)**
-1. Enter your phone number
-2. TUI checks WhatsApp Web for pairing code option
-3. If available → displays pairing code from browser
-4. Enter code from WhatsApp on your phone
-5. Connected!
-
-**Option B: QR Code (fallback)**
-1. Skip phone number input
-2. QR code displayed in terminal
-3. Scan with WhatsApp on your phone
-4. Connected!
-
-## How Pairing Code Works on WhatsApp Web
-
-WhatsApp has been rolling out "Link with phone number" feature:
-- Some accounts show pairing code option
-- Some accounts only show QR code
-- TUI checks for both options
-
-## Debugging
-
-### Screenshots
-
-All screenshots saved as PNG files:
-- `connection-failed.png` - If connection fails
-- `send-failed.png` - If message send fails  
-- `screenshot.png` - Manual screenshot
-
-### Headless Mode
-
-Run without visible browser:
 ```bash
-HEADLESS=true npm start
+npm run pair      # node cli.js pair
+npm run check     # node cli.js check
+npm run list      # node cli.js list
+npm run send      # node cli.js send (needs args)
 ```
 
-Take screenshots to see what's happening.
+### JSON Output Format
+
+All commands return JSON:
+
+**check:**
+```json
+{"success":true,"status":"connected","message":"Session valid"}
+```
+
+**list:**
+```json
+{"success":true,"chats":[{"index":0,"name":"John Doe","type":"contact","jid":"..."}]}
+```
+
+**send:**
+```json
+{"success":true,"status":"sent","to":"+1234567890","message":"Hello"}
+```
+
+**error:**
+```json
+{"success":false,"error":"Not connected. Run pair first."}
+```
+
+## Cron Example
+
+```cron
+# Send daily reminder at 9am
+0 9 * * * cd /path/to/whatsapp-scheduler-tui && node cli.js send --to="+1234567890" --message="Daily reminder"
+```
+
+## Session Persistence
+
+Session stored in: `~/.whatsapp-scheduler-session`
+
+Once paired, session persists across runs. No need to pair again until:
+- Manual logout
+- Session expires (WhatsApp limit: ~14 days)
+- Different machine/IP
+
+## How It Works
+
+1. **init()** - Launches browser, checks if session exists
+2. **pair()** - Pairing code or QR code authentication
+3. **listChats()** - Extracts chat list from DOM
+4. **sendMessage()** - Search → Click chat → Type → Send
+
+## Debug Files (not committed)
+
+When running in TUI mode, debug files are saved:
+- `*.html` - Page snapshots
+- `*.json` - DOM analysis
+- `*.png` - Screenshots
+
+These help troubleshoot selectors when WhatsApp UI changes.
+
+## Requirements
+
+- Node.js 18+
+- Chrome/Chromium (Puppeteer bundled)
 
 ## Known Issues
 
 | Issue | Cause | Solution |
 |-------|-------|----------|
-| 405 error | IP blocking | Try residential IP |
-| Pairing code unavailable | WhatsApp region/account | Use QR code |
-| Timeout | Slow connection | Check network |
-| Browser crashes | Puppeteer issues | Update puppeteer |
-
-## Project Structure
-
-```
-whatsapp-scheduler-tui/
-├── index.js              # CLI menu
-├── puppeteer-whatsapp.js  # Puppeteer WhatsApp Web automation
-├── package.json
-└── README.md
-```
-
-## Comparison
-
-| Tool | Auth | Platform | Block Risk |
-|------|------|----------|------------|
-| Baileys | Pairing Code | Mobile protocol | Higher (detects automation) |
-| Puppeteer | QR + Pairing | WhatsApp Web | Lower (real browser) |
+| Session invalid | Expired or IP change | Re-pair |
+| Chat not found | Wrong phone format | Use digits only |
+| Send fails | Selector changed | Check debug HTML |
 
 ## Related
 

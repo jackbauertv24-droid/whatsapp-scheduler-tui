@@ -1,18 +1,26 @@
 {
   "name": "whatsapp-scheduler-tui",
   "version": "2.0.0",
-  "description": "Terminal UI tool for testing WhatsApp via Puppeteer",
+  "description": "WhatsApp Web automation tool - TUI (interactive) and CLI (non-interactive) modes",
   "type": "module",
   "main": "index.js",
+  "bin": {
+    "wa-tui": "./index.js",
+    "wa-cli": "./cli.js"
+  },
   "scripts": {
     "start": "node index.js",
-    "start:headless": "HEADLESS=true node index.js"
+    "cli": "node cli.js",
+    "pair": "node cli.js pair",
+    "check": "node cli.js check",
+    "list": "node cli.js list",
+    "send": "node cli.js send"
   },
   "dependencies": {
     "puppeteer": "^22.0.0",
     "qrcode-terminal": "^0.12.0"
   },
-  "keywords": ["whatsapp", "puppeteer", "tui", "cli"],
+  "keywords": ["whatsapp", "puppeteer", "tui", "cli", "automation", "scheduler"],
   "author": "",
   "license": "MIT"
 }
