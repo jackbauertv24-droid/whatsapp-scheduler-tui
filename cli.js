@@ -71,7 +71,7 @@ async function pair(sessionId, phoneNumber = null, force = false) {
     createSession(sessionId, phoneNumber);
   }
   
-  await init(sessionId, false);
+  await init(sessionId, true);
   
   if (connectionState === 'connected') {
     await disconnect();
