@@ -1,4 +1,7 @@
 node_modules/
 *.png
 *.log
-.env
+.env*.html
+*.json
+qrcode.png
+*.png
