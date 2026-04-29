@@ -808,90 +808,222 @@ async function sendMessage(jid, content) {
     log('Saved: sendmessage-after-search.html', 'warn');
     
     // Log what we found in search
-    const searchResultCount = await page.evaluate(() => {
+    const searchResultInfo = await page.evaluate(() => {
       const items = document.querySelectorAll('[data-testid^="list-item-"]');
-      return items.length;
+      const listItems = Array.from(items).map(el => {
+        const title = el.querySelector('[data-testid="cell-frame-title"]')?.textContent || 'unknown';
+        const gridcell = el.querySelector('div[role="gridcell"]');
+        const ariaEl = el.querySelector('[aria-selected]');
+        return {
+          testId: el.getAttribute('data-testid'),
+          title,
+          hasGridcell: !!gridcell,
+          gridcellTabIndex: gridcell?.getAttribute('tabindex') || 'none',
+          ariaSelected: ariaEl?.getAttribute('aria-selected') || 'none',
+          outerHTML: el.outerHTML.substring(0, 300)
+        };
+      });
+      return { count: items.length, listItems };
     });
-    log(`Search returned ${searchResultCount} items (including section headers)`, 'warn');
     
-    // Find chat result - look for gridcell inside list-item
-    const chatSelectors = [
-      '[data-testid="list-item-1"] div[role="gridcell"]',  // First search result
-      '[data-testid^="list-item-"] div[role="gridcell"]',  // Any list item gridcell
-      '#pane-side div[role="gridcell"][tabindex="0"]',     // Any clickable gridcell
-      '[data-testid="list-item-1"]',                       // The list-item itself
-      '#pane-side div[aria-selected]'                      // Any selectable item
+    fs.writeFileSync('sendmessage-search-results.json', JSON.stringify(searchResultInfo, null, 2));
+    log(`Search returned ${searchResultInfo.count} items`, 'warn');
+    
+    if (searchResultInfo.listItems.length > 0) {
+      log(`First result: testId=${searchResultInfo.listItems[0].testId}, title=${searchResultInfo.listItems[0].title}`, 'warn');
+    }
+    
+    // Multiple click strategies to try
+    const clickStrategies = [
+      {
+        name: 'puppeteer-page-click-gridcell',
+        selector: '[data-testid="list-item-1"] div[role="gridcell"][tabindex="0"]'
+      },
+      {
+        name: 'puppeteer-page-click-listitem',
+        selector: '[data-testid="list-item-1"]'
+      },
+      {
+        name: 'puppeteer-click-cell-frame-container',
+        selector: '[data-testid="list-item-1"] [data-testid="cell-frame-container"]'
+      },
+      {
+        name: 'puppeteer-click-with-scroll',
+        selector: '[data-testid="list-item-1"]',
+        scroll: true
+      }
     ];
     
-    let chatElement = null;
+    let chatOpened = false;
     
-    for (const sel of chatSelectors) {
-      chatElement = await page.$(sel);
-      if (chatElement) {
-        log(`Chat found with: ${sel}`, 'success');
-        break;
+    for (const strategy of clickStrategies) {
+      log(`Trying click strategy: ${strategy.name}...`, 'warn');
+      
+      try {
+        const element = await page.$(strategy.selector);
+        if (!element) {
+          log(`Element not found for selector: ${strategy.selector}`, 'warn');
+          continue;
+        }
+        
+        // Scroll into view if needed
+        if (strategy.scroll) {
+          await element.evaluate(el => el.scrollIntoView({ block: 'center' }));
+          await delay(200);
+        }
+        
+        // Use Puppeteer's click (simulates real mouse events)
+        await element.click({ delay: 50 });
+        log(`Clicked with: ${strategy.name}`, 'success');
+        
+        await delay(1500);
+        
+        // Check if chat opened
+        const checkResult = await page.evaluate(() => {
+          const main = document.querySelector('#main');
+          const intro = document.querySelector('[data-testid="intro-panel"]');
+          const conversation = document.querySelector('[data-testid="conversation-panel-wrapper"]');
+          const ariaSelected = document.querySelector('[aria-selected="true"]');
+          
+          return {
+            mainFound: !!main,
+            introFound: !!intro,
+            conversationFound: !!conversation,
+            ariaSelectedTrue: !!ariaSelected,
+            bodyPreview: document.body.innerText.substring(0, 200)
+          };
+        });
+        
+        log(`After click: main=${checkResult.mainFound}, intro=${checkResult.introFound}, ariaSelected=${checkResult.ariaSelectedTrue}`, 'warn');
+        
+        if (checkResult.mainFound || checkResult.conversationFound || checkResult.ariaSelectedTrue) {
+          chatOpened = true;
+          log(`Chat opened with strategy: ${strategy.name}`, 'success');
+          break;
+        }
+        
+      } catch (clickErr) {
+        log(`Click failed: ${clickErr.message}`, 'warn');
       }
     }
     
-    if (!chatElement) {
-      log('Chat result not found', 'error');
+    // If all puppeteer clicks failed, try keyboard navigation
+    if (!chatOpened) {
+      log('Trying keyboard navigation (ArrowDown + Enter)...', 'warn');
       
-      const resultAnalysis = await page.evaluate(() => {
-        const pane = document.querySelector('#pane-side');
-        if (!pane) return { paneFound: false };
+      // Clear search input focus first
+      await page.keyboard.press('Escape');
+      await delay(300);
+      
+      // Re-focus and navigate
+      const searchInputAgain = await page.$('[data-testid="chat-list-search-container"] input');
+      if (searchInputAgain) {
+        await searchInputAgain.focus();
+        await delay(100);
         
-        const items = pane.querySelectorAll('[data-testid^="list-item-"]');
+        // Arrow down to first result
+        await page.keyboard.press('ArrowDown');
+        await delay(500);
+        
+        // Press Enter to select
+        await page.keyboard.press('Enter');
+        await delay(2000);
+      }
+      
+      // Check result
+      const keyboardCheck = await page.evaluate(() => {
+        const main = document.querySelector('#main');
+        const ariaSelected = document.querySelector('[aria-selected="true"]');
         return {
-          paneFound: true,
-          itemCount: items.length,
-          items: Array.from(items).slice(0, 5).map(el => ({
-            testId: el.getAttribute('data-testid'),
-            title: el.querySelector('[data-testid="cell-frame-title"]')?.textContent || 'unknown',
-            outerHTML: el.outerHTML.substring(0, 200)
-          }))
+          mainFound: !!main,
+          ariaSelectedTrue: !!ariaSelected
         };
       });
       
-      fs.writeFileSync('sendmessage-chat-analysis.json', JSON.stringify(resultAnalysis, null, 2));
-      log('Saved: sendmessage-chat-analysis.json', 'warn');
-      log(`Found ${resultAnalysis.itemCount} chat items in pane`, 'warn');
+      log(`Keyboard nav result: main=${keyboardCheck.mainFound}, ariaSelected=${keyboardCheck.ariaSelectedTrue}`, 'warn');
       
-      return { success: false, error: 'Chat not found in results' };
-    }
-    
-    // Click the chat using evaluate (more reliable than puppeteer click)
-    log('Clicking chat element...');
-    await chatElement.evaluate(el => {
-      // Try clicking the element and also dispatch mouse event
-      el.click();
-      el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-    log('Clicked chat (via evaluate)');
-    await delay(2000);
-    
-    // Wait for chat panel to open - look for #main or conversation panel
-    log('Waiting for chat to open...');
-    const chatOpened = await page.waitForSelector('#main, [data-testid="conversation-panel-wrapper"]', { timeout: 5000 }).catch(() => null);
-    
-    if (!chatOpened) {
-      log('Chat panel did not open after click', 'error');
-      
-      // Try double-click or alternative click
-      log('Trying alternative click method...', 'warn');
-      await chatElement.evaluate(el => {
-        el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-        el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-        el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      });
-      await delay(2000);
-      
-      const retryOpened = await page.waitForSelector('#main, [data-testid="conversation-panel-wrapper"]', { timeout: 3000 }).catch(() => null);
-      if (!retryOpened) {
-        log('Still not opened', 'error');
+      if (keyboardCheck.mainFound || keyboardCheck.ariaSelectedTrue) {
+        chatOpened = true;
+        log('Chat opened with keyboard navigation', 'success');
       }
     }
     
-    // Verify chat is open by checking for main panel
+    // Final fallback: evaluate click with full mouse event simulation
+    if (!chatOpened) {
+      log('Trying full mouse event simulation...', 'warn');
+      
+      const clickResult = await page.evaluate(() => {
+        const gridcell = document.querySelector('[data-testid="list-item-1"] div[role="gridcell"]');
+        if (!gridcell) return { success: false, reason: 'gridcell not found' };
+        
+        // Simulate full mouse interaction sequence
+        const rect = gridcell.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        
+        // Full event sequence that React apps typically expect
+        gridcell.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, clientX: centerX, clientY: centerY }));
+        gridcell.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientX: centerX, clientY: centerY }));
+        gridcell.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: centerX, clientY: centerY, button: 0 }));
+        gridcell.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: centerX, clientY: centerY, button: 0 }));
+        gridcell.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: centerX, clientY: centerY, button: 0 }));
+        
+        // Also try focus
+        gridcell.focus();
+        gridcell.dispatchEvent(new Event('focus', { bubbles: true }));
+        
+        return { success: true, clickedAt: { x: centerX, y: centerY } };
+      });
+      
+      log(`Full mouse simulation: ${JSON.stringify(clickResult)}`, 'warn');
+      await delay(2000);
+      
+      const finalCheck = await page.evaluate(() => {
+        const main = document.querySelector('#main');
+        const ariaSelected = document.querySelector('[aria-selected="true"]');
+        return { mainFound: !!main, ariaSelectedTrue: !!ariaSelected };
+      });
+      
+      if (finalCheck.mainFound || finalCheck.ariaSelectedTrue) {
+        chatOpened = true;
+        log('Chat opened with full mouse simulation', 'success');
+      }
+    }
+    
+    // Save state after all click attempts
+    const afterClickHtml = await page.content();
+    fs.writeFileSync('sendmessage-after-all-clicks.html', afterClickHtml);
+    log('Saved: sendmessage-after-all-clicks.html', 'warn');
+    
+    if (!chatOpened) {
+      log('All click strategies failed - chat did not open', 'error');
+      
+      // Save detailed failure analysis
+      const failAnalysis = await page.evaluate(() => {
+        return {
+          paneSide: !!document.querySelector('#pane-side'),
+          main: !!document.querySelector('#main'),
+          intro: !!document.querySelector('[data-testid="intro-panel"]'),
+          ariaStates: Array.from(document.querySelectorAll('[aria-selected]')).map(el => ({
+            testId: el.closest('[data-testid]')?.getAttribute('data-testid'),
+            selected: el.getAttribute('aria-selected')
+          })),
+          activeElement: document.activeElement?.tagName,
+          bodyText: document.body.innerText.substring(0, 500)
+        };
+      });
+      
+      fs.writeFileSync('sendmessage-fail-analysis.json', JSON.stringify(failAnalysis, null, 2));
+      log('Saved: sendmessage-fail-analysis.json', 'warn');
+      
+      return { success: false, error: 'Chat click failed - all strategies exhausted' };
+    }
+    
+    // Wait for chat panel to fully load
+    log('Waiting for chat panel to load...');
+    await delay(1000);
+    
+    // Verify chat is open
     const mainPanel = await page.$('#main');
     log(`Main panel found: ${!!mainPanel}`, mainPanel ? 'success' : 'warn');
     
@@ -957,47 +1089,183 @@ async function sendMessage(jid, content) {
       return { success: false, error: 'Message input not found' };
     }
     
-    // Type message
+    // Type message - Lexical editor requires special handling
     log('Typing message...');
-    await messageInput.focus();
-    await delay(100);
-    await messageInput.type(content, { delay: 20 });
-    await delay(300);
     
-    // Find send button
+    // First, click to focus the compose box
+    await messageInput.click();
+    await delay(200);
+    
+    // Check if compose box is empty before typing
+    const beforeType = await messageInput.evaluate(el => {
+      const span = el.querySelector('[data-lexical-text="true"]');
+      return span ? span.textContent : '';
+    });
+    log(`Compose box before typing: "${beforeType}"`, 'warn');
+    
+    // Clear any existing content first (Ctrl+A then Delete)
+    await page.keyboard.down('Control');
+    await page.keyboard.press('A');
+    await page.keyboard.up('Control');
+    await delay(100);
+    await page.keyboard.press('Backspace');
+    await delay(100);
+    
+    // Try typing with element.type first
+    try {
+      await messageInput.type(content, { delay: 50 });
+    } catch (typeErr) {
+      log(`element.type failed: ${typeErr.message}, using keyboard.type`, 'warn');
+      await page.keyboard.type(content, { delay: 50 });
+    }
+    
+    await delay(500);
+    
+    // Verify text was typed
+    const afterType = await messageInput.evaluate(el => {
+      const span = el.querySelector('[data-lexical-text="true"]');
+      return span ? span.textContent : '';
+    });
+    log(`Compose box after typing: "${afterType}"`, afterType === content ? 'success' : 'warn');
+    
+    if (afterType !== content) {
+      log('Typing verification failed, retrying with keyboard...', 'warn');
+      
+      // Clear again
+      await page.keyboard.down('Control');
+      await page.keyboard.press('A');
+      await page.keyboard.up('Control');
+      await delay(100);
+      await page.keyboard.press('Backspace');
+      await delay(100);
+      
+      // Type with keyboard directly
+      await page.keyboard.type(content, { delay: 30 });
+      await delay(500);
+      
+      const retryText = await messageInput.evaluate(el => {
+        const span = el.querySelector('[data-lexical-text="true"]');
+        return span ? span.textContent : '';
+      });
+      log(`Retry result: "${retryText}"`, retryText === content ? 'success' : 'error');
+      
+      if (retryText !== content) {
+        log('Failed to type message into compose box', 'error');
+        return { success: false, error: 'Failed to type message' };
+      }
+    }
+    
+    // Find send button - WhatsApp uses aria-label for localization
     const sendSelectors = [
-      '[data-testid="compose-btn-send"]',
-      'footer button[data-testid="send"]',
-      'button[aria-label="Send"]',
-      'button[data-testid*="send"]',
-      'footer button[type="button"]'
+      'footer button[aria-label="Send"]',
+      'footer button[aria-label="傳送"]',
+      'footer button[aria-label="Enviar"]',
+      'footer button[aria-label="发送"]',
+      'footer button[data-testid="wds-ic-send-filled"]',
+      'footer button[aria-label*="Send"]',
+      'footer button[aria-label*="傳"]',
+      '#main footer button[type="button"][tabindex="0"]',
+      '[data-testid="compose-box"] button[type="button"]'
     ];
     
     let sendBtn = null;
+    let sendBtnMethod = '';
     
     for (const sel of sendSelectors) {
       sendBtn = await page.$(sel);
       if (sendBtn) {
-        log(`Send button found with: ${sel}`, 'success');
-        break;
+        // Verify it's actually the send button by checking aria-label
+        const ariaLabel = await sendBtn.evaluate(el => el.getAttribute('aria-label') || '');
+        log(`Button found with: ${sel}, aria-label="${ariaLabel}"`, 'warn');
+        
+        // Accept if aria-label contains send-related words
+        const sendWords = ['send', '傳送', 'Enviar', '发送', 'submit'];
+        const isSendBtn = sendWords.some(w => ariaLabel.toLowerCase().includes(w.toLowerCase()));
+        
+        if (isSendBtn) {
+          log(`Confirmed as SEND button: ${ariaLabel}`, 'success');
+          sendBtnMethod = sel;
+          break;
+        } else {
+          log(`Not a send button, skipping...`, 'warn');
+          sendBtn = null;
+        }
       }
     }
     
     if (sendBtn) {
-      await sendBtn.click();
-      log('Message sent via button', 'success');
+      log('Clicking send button...', 'warn');
+      await sendBtn.click({ delay: 50 });
+      await delay(500);
+      log('Send button clicked', 'success');
     } else {
+      log('Send button not found, trying keyboard Enter...', 'warn');
+      
+      // For Lexical editor, we need to ensure focus and use keyboard
+      await messageInput.focus();
+      await delay(100);
+      
+      // Try multiple Enter key approaches
       await page.keyboard.press('Enter');
-      log('Message sent via Enter key', 'success');
+      await delay(300);
+      
+      // Check if compose box still has text
+      const stillHasText = await messageInput.evaluate(el => {
+        const span = el.querySelector('[data-lexical-text="true"]');
+        return span ? span.textContent.length > 0 : false;
+      });
+      
+      if (stillHasText) {
+        log('Enter did not send, trying Ctrl+Enter...', 'warn');
+        await page.keyboard.down('Control');
+        await page.keyboard.press('Enter');
+        await page.keyboard.up('Control');
+        await delay(300);
+      }
+      
+      log('Keyboard send attempted', 'warn');
     }
     
-    await delay(1000);
+    // Wait for message to be sent
+    await delay(2000);
+    
+    // Verify message was actually sent - compose box should be empty
+    const composeEmpty = await page.evaluate(() => {
+      const compose = document.querySelector('[data-testid="conversation-compose-box-input"]');
+      if (!compose) return { empty: false, reason: 'compose not found' };
+      
+      // Check if there's any lexical text content
+      const textSpan = compose.querySelector('[data-lexical-text="true"]');
+      const hasText = textSpan ? textSpan.textContent.length > 0 : false;
+      
+      // Check for any p tags with content
+      const pTags = compose.querySelectorAll('p');
+      const hasPContent = Array.from(pTags).some(p => p.textContent.length > 0);
+      
+      return {
+        empty: !hasText && !hasPContent,
+        lexicalText: textSpan ? textSpan.textContent : '',
+        pCount: pTags.length
+      };
+    });
+    
+    log(`Compose box after send: empty=${composeEmpty.empty}, text="${composeEmpty.lexicalText}"`, composeEmpty.empty ? 'success' : 'warn');
     
     const sentHtml = await page.content();
     fs.writeFileSync('sendmessage-sent.html', sentHtml);
     log('Saved: sendmessage-sent.html', 'warn');
     
-    return { success: true };
+    // Also save compose state analysis
+    fs.writeFileSync('sendmessage-compose-state.json', JSON.stringify(composeEmpty, null, 2));
+    log('Saved: sendmessage-compose-state.json', 'warn');
+    
+    if (!composeEmpty.empty) {
+      log('Message NOT sent - compose box still has content', 'error');
+      return { success: false, error: 'Message not sent - compose box not cleared', composeState: composeEmpty };
+    }
+    
+    log('Message sent successfully!', 'success');
+    return { success: true, composeState: composeEmpty };
   } catch (err) {
     log(`Send error: ${err.message}`, 'error');
     const errorHtml = await page.content();
