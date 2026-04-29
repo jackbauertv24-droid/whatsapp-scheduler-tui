@@ -1,14 +1,20 @@
 import puppeteer from 'puppeteer';
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
+import {
+  getSessionPath,
+  sessionExists,
+  createSession,
+  updateSession,
+  clearSession,
+  deleteSession,
+  listSessions
+} from './lib/session-manager.js';
 
-const SESSION_DIR = path.join(os.homedir(), '.whatsapp-scheduler-session');
 const BASE_URL = 'https://web.whatsapp.com';
 
 let browser = null;
 let page = null;
 let connectionState = 'disconnected';
+let currentSessionId = null;
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -16,14 +22,17 @@ function output(data) {
   console.log(JSON.stringify(data));
 }
 
-async function init(headless = true) {
-  if (!fs.existsSync(SESSION_DIR)) {
-    fs.mkdirSync(SESSION_DIR, { recursive: true });
+async function init(sessionId, headless = true) {
+  currentSessionId = sessionId;
+  const sessionPath = getSessionPath(sessionId);
+  
+  if (!sessionExists(sessionId)) {
+    createSession(sessionId);
   }
   
   browser = await puppeteer.launch({
     headless,
-    userDataDir: SESSION_DIR,
+    userDataDir: sessionPath,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -48,18 +57,25 @@ async function init(headless = true) {
   
   if (alreadyLoggedIn) {
     connectionState = 'connected';
-    return { success: true, status: 'session-restored', message: 'Already logged in' };
+    updateSession(sessionId, { status: 'connected' });
+    return { success: true, status: 'session-restored', message: 'Already logged in', session: sessionId };
   }
   
-  return { success: true, status: 'not-logged-in', message: 'Need to pair' };
+  updateSession(sessionId, { status: 'not-logged-in' });
+  return { success: true, status: 'not-logged-in', message: 'Need to pair', session: sessionId };
 }
 
-async function pair(phoneNumber = null) {
-  await init(false); // Non-headless for pairing
+async function pair(sessionId, phoneNumber = null, force = false) {
+  if (force) {
+    clearSession(sessionId);
+    createSession(sessionId, phoneNumber);
+  }
+  
+  await init(sessionId, false);
   
   if (connectionState === 'connected') {
     await disconnect();
-    return { success: true, status: 'session-restored', message: 'Already paired' };
+    return { success: true, status: 'session-restored', message: 'Already paired', session: sessionId };
   }
   
   await page.waitForSelector('canvas', { timeout: 10000 });
@@ -131,35 +147,39 @@ async function pair(phoneNumber = null) {
       });
       
       if (codeResult.code) {
+        updateSession(sessionId, { phone: phoneNumber, status: 'pairing' });
         output({
           success: true,
           status: 'pairing-code',
           pairingCode: codeResult.code,
+          session: sessionId,
           message: 'Enter this code on your phone: WhatsApp > Settings > Linked Devices > Link with phone number'
         });
         
-        // Wait for user to complete pairing
         const startTime = Date.now();
         while (Date.now() - startTime < 120000) {
           const loggedIn = await page.evaluate(() => !!document.querySelector('#pane-side'));
           if (loggedIn) {
             connectionState = 'connected';
+            updateSession(sessionId, { status: 'connected' });
             await disconnect();
-            return { success: true, status: 'paired', message: 'Pairing completed' };
+            return { success: true, status: 'paired', message: 'Pairing completed', session: sessionId };
           }
           await delay(2000);
         }
         
+        updateSession(sessionId, { status: 'timeout' });
         await disconnect();
-        return { success: false, status: 'pairing-timeout', message: 'Pairing not completed in 120s' };
+        return { success: false, status: 'pairing-timeout', message: 'Pairing not completed in 120s', session: sessionId };
       }
     }
   }
   
-  // Fallback to QR code
+  updateSession(sessionId, { status: 'qr-pairing' });
   output({
     success: true,
     status: 'qr-code',
+    session: sessionId,
     message: 'QR code displayed in browser window. Scan with WhatsApp on your phone.'
   });
   
@@ -168,29 +188,36 @@ async function pair(phoneNumber = null) {
     const loggedIn = await page.evaluate(() => !!document.querySelector('#pane-side'));
     if (loggedIn) {
       connectionState = 'connected';
+      updateSession(sessionId, { status: 'connected' });
       await disconnect();
-      return { success: true, status: 'paired', message: 'QR scan completed' };
+      return { success: true, status: 'paired', message: 'QR scan completed', session: sessionId };
     }
     await delay(2000);
   }
   
+  updateSession(sessionId, { status: 'timeout' });
   await disconnect();
-  return { success: false, status: 'pairing-timeout', message: 'QR not scanned in 120s' };
+  return { success: false, status: 'pairing-timeout', message: 'QR not scanned in 120s', session: sessionId };
 }
 
-async function checkSession() {
-  await init(true);
-  const result = { success: true, status: connectionState, message: connectionState === 'connected' ? 'Session valid' : 'Session invalid, need to pair' };
+async function checkSession(sessionId) {
+  await init(sessionId, true);
+  const result = {
+    success: true,
+    status: connectionState,
+    session: sessionId,
+    message: connectionState === 'connected' ? 'Session valid' : 'Session invalid, need to pair'
+  };
   await disconnect();
   return result;
 }
 
-async function listChats() {
-  await init(true);
+async function listChats(sessionId) {
+  await init(sessionId, true);
   
   if (connectionState !== 'connected') {
     await disconnect();
-    return { success: false, error: 'Not connected. Run pair first.' };
+    return { success: false, error: 'Not connected. Run pair first.', session: sessionId };
   }
   
   await page.waitForSelector('#pane-side', { timeout: 10000 });
@@ -218,24 +245,23 @@ async function listChats() {
   });
   
   await disconnect();
-  return { success: true, chats };
+  return { success: true, chats, session: sessionId };
 }
 
-async function sendMessage(to, message) {
-  await init(true);
+async function sendMessage(sessionId, to, message) {
+  await init(sessionId, true);
   
   if (connectionState !== 'connected') {
     await disconnect();
-    return { success: false, error: 'Not connected. Run pair first.' };
+    return { success: false, error: 'Not connected. Run pair first.', session: sessionId };
   }
   
   await page.waitForSelector('#pane-side', { timeout: 10000 });
   
-  // Search
   const searchInput = await page.$('[data-testid="chat-list-search-container"] input');
   if (!searchInput) {
     await disconnect();
-    return { success: false, error: 'Search input not found' };
+    return { success: false, error: 'Search input not found', session: sessionId };
   }
   
   const searchTerm = to.replace(/[^0-9]/g, '');
@@ -247,28 +273,25 @@ async function sendMessage(to, message) {
   await searchInput.type(searchTerm, { delay: 30 });
   await delay(2000);
   
-  // Click chat result
   const chatElement = await page.$('[data-testid="list-item-1"] div[role="gridcell"][tabindex="0"]');
   if (!chatElement) {
     await disconnect();
-    return { success: false, error: 'Chat not found in search results' };
+    return { success: false, error: 'Chat not found in search results', session: sessionId };
   }
   
   await chatElement.click({ delay: 50 });
   await delay(2000);
   
-  // Wait for chat to open
   const mainPanel = await page.$('#main');
   if (!mainPanel) {
     await disconnect();
-    return { success: false, error: 'Chat did not open' };
+    return { success: false, error: 'Chat did not open', session: sessionId };
   }
   
-  // Type message
   const messageInput = await page.$('[data-testid="conversation-compose-box-input"]');
   if (!messageInput) {
     await disconnect();
-    return { success: false, error: 'Compose box not found' };
+    return { success: false, error: 'Compose box not found', session: sessionId };
   }
   
   await messageInput.click();
@@ -282,8 +305,7 @@ async function sendMessage(to, message) {
   await messageInput.type(message, { delay: 30 });
   await delay(500);
   
-  // Send
-  const sendBtn = await page.$('footer button[aria-label="傳送"]') || 
+  const sendBtn = await page.$('footer button[aria-label="傳送"]') ||
                   await page.$('footer button[aria-label="Send"]');
   
   if (sendBtn) {
@@ -294,7 +316,6 @@ async function sendMessage(to, message) {
   
   await delay(2000);
   
-  // Verify sent
   const composeEmpty = await page.evaluate(() => {
     const compose = document.querySelector('[data-testid="conversation-compose-box-input"]');
     const textSpan = compose?.querySelector('[data-lexical-text="true"]');
@@ -304,9 +325,9 @@ async function sendMessage(to, message) {
   await disconnect();
   
   if (composeEmpty) {
-    return { success: true, status: 'sent', to, message };
+    return { success: true, status: 'sent', to, message, session: sessionId };
   } else {
-    return { success: false, error: 'Message not sent - compose box not cleared' };
+    return { success: false, error: 'Message not sent - compose box not cleared', session: sessionId };
   }
 }
 
@@ -319,40 +340,72 @@ async function disconnect() {
   connectionState = 'disconnected';
 }
 
-// CLI entry point
+function parseArgs(args) {
+  const result = {
+    command: args[0],
+    session: 'default',
+    phone: null,
+    force: false,
+    to: null,
+    message: null
+  };
+  
+  for (const arg of args) {
+    if (arg.startsWith('--session=')) {
+      result.session = arg.split('=')[1];
+    } else if (arg.startsWith('--phone=')) {
+      result.phone = arg.split('=')[1];
+    } else if (arg === '--force') {
+      result.force = true;
+    } else if (arg.startsWith('--to=')) {
+      result.to = arg.split('=')[1];
+    } else if (arg.startsWith('--message=')) {
+      result.message = arg.split('=')[1];
+    }
+  }
+  
+  return result;
+}
+
 async function main() {
   const args = process.argv.slice(2);
-  const command = args[0];
+  const parsed = parseArgs(args);
   
-  switch (command) {
+  switch (parsed.command) {
     case 'pair':
-      const phoneArg = args.find(a => a.startsWith('--phone='));
-      const phone = phoneArg ? phoneArg.split('=')[1] : null;
-      const result = await pair(phone);
-      if (result.status !== 'pairing-code' && result.status !== 'qr-code') {
-        output(result);
+      const pairResult = await pair(parsed.session, parsed.phone, parsed.force);
+      if (pairResult.status !== 'pairing-code' && pairResult.status !== 'qr-code') {
+        output(pairResult);
       }
       break;
       
     case 'check':
-      output(await checkSession());
+      output(await checkSession(parsed.session));
       break;
       
     case 'list':
-      output(await listChats());
+      output(await listChats(parsed.session));
       break;
       
     case 'send':
-      const toArg = args.find(a => a.startsWith('--to='));
-      const msgArg = args.find(a => a.startsWith('--message='));
-      const toValue = toArg ? toArg.split('=')[1] : null;
-      const msgValue = msgArg ? msgArg.split('=')[1] : null;
-      
-      if (!toValue || !msgValue) {
-        output({ success: false, error: 'Usage: send --to="+1234567890" --message="Hello"' });
+      if (!parsed.to || !parsed.message) {
+        output({ success: false, error: 'Usage: send --to="+1234567890" --message="Hello"', session: parsed.session });
         break;
       }
-      output(await sendMessage(toValue, msgValue));
+      output(await sendMessage(parsed.session, parsed.to, parsed.message));
+      break;
+      
+    case 'sessions':
+      output({ success: true, sessions: listSessions() });
+      break;
+      
+    case 'delete':
+      if (!parsed.session || parsed.session === 'default') {
+        output({ success: false, error: 'Usage: delete --session=<sessionId>' });
+        break;
+      }
+      deleteSession(parsed.session);
+      output({ success: true, status: 'deleted', session: parsed.session });
       break;
       
     case 'help':
@@ -362,14 +415,31 @@ async function main() {
 WhatsApp Scheduler CLI
 
 Usage:
-  node cli.js pair [--phone=+1234567890]    - Pair session (pairing code or QR)
-  node cli.js check                          - Check if session is valid
-  node cli.js list                           - List contacts/groups
-  node cli.js send --to="+1234567890" --message="Hello"  - Send message
+  node cli.js pair [--session=<id>] [--phone=+1234567890] [--force]
+    Pair session (pairing code or QR). --force clears existing session.
+  
+  node cli.js check [--session=<id>]
+    Check if session is valid
+  
+  node cli.js list [--session=<id>]
+    List contacts/groups
+  
+  node cli.js send [--session=<id>] --to="+1234567890" --message="Hello"
+    Send message
+  
+  node cli.js sessions
+    List all sessions
+  
+  node cli.js delete --session=<id>
+    Delete a session
+
+Session IDs:
+  Default: "default"
+  Custom: any string (e.g., "work", "personal", "user123")
 
 Output format: JSON (for LLM consumption)
 
-Session stored in: ~/.whatsapp-scheduler-session
+Sessions stored in: ~/.whatsapp-scheduler/sessions/
 `);
       break;
   }

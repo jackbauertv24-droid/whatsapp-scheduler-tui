@@ -1,7 +1,7 @@
 {
   "name": "whatsapp-scheduler-tui",
-  "version": "2.0.0",
-  "description": "WhatsApp Web automation tool - TUI (interactive) and CLI (non-interactive) modes",
+  "version": "3.0.0",
+  "description": "WhatsApp Web automation tool - TUI (interactive) and CLI (non-interactive) with multi-session support",
   "type": "module",
   "main": "index.js",
   "bin": {
@@ -14,13 +14,14 @@
     "pair": "node cli.js pair",
     "check": "node cli.js check",
     "list": "node cli.js list",
-    "send": "node cli.js send"
+    "send": "node cli.js send",
+    "sessions": "node cli.js sessions"
   },
   "dependencies": {
     "puppeteer": "^22.0.0",
     "qrcode-terminal": "^0.12.0"
   },
-  "keywords": ["whatsapp", "puppeteer", "tui", "cli", "automation", "scheduler"],
+  "keywords": ["whatsapp", "puppeteer", "tui", "cli", "automation", "scheduler", "multi-session"],
   "author": "",
   "license": "MIT"
 }

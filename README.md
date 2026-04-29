@@ -2,7 +2,7 @@
 
 WhatsApp Web automation tool with two modes:
 1. **TUI (Interactive)** - Terminal menu for manual testing
-2. **CLI (Non-interactive)** - JSON output for LLMs and scheduling tools
+2. **CLI (Non-interactive)** - JSON output for LLMs, APIs, and scheduling tools
 
 ## Installation
 
@@ -28,79 +28,125 @@ Menu options:
 
 ## Mode 2: CLI (Non-interactive)
 
-For LLMs, cron jobs, and automation. Output is JSON.
+For LLMs, cron jobs, APIs, and automation. Output is JSON.
 
 ### Commands
 
 ```bash
-# Pair session (opens browser window for pairing)
-node cli.js pair [--phone=+1234567890]
+# Pair session (opens browser for pairing)
+node cli.js pair [--session=<id>] [--phone=+1234567890] [--force]
 
 # Check if session is valid
-node cli.js check
+node cli.js check [--session=<id>]
 
 # List contacts/groups
-node cli.js list
+node cli.js list [--session=<id>]
 
 # Send message
-node cli.js send --to="+1234567890" --message="Hello from CLI"
+node cli.js send [--session=<id>] --to="+1234567890" --message="Hello"
 
-# Help
-node cli.js help
+# List all sessions
+node cli.js sessions
+
+# Delete a session
+node cli.js delete --session=<id>
 ```
 
-### NPM Scripts
+### Multi-Session Support
+
+Multiple WhatsApp accounts can be managed with session IDs:
 
 ```bash
-npm run pair      # node cli.js pair
-npm run check     # node cli.js check
-npm run list      # node cli.js list
-npm run send      # node cli.js send (needs args)
+# Pair work account
+node cli.js pair --session=work --phone="+1234567890"
+
+# Pair personal account (force new pairing)
+node cli.js pair --session=personal --phone="+9876543210" --force
+
+# Send via work account
+node cli.js send --session=work --to="+1234567890" --message="Work update"
+
+# List all sessions
+node cli.js sessions
+
+# Delete a session
+node cli.js delete --session=work
 ```
+
+### Session Flags
+
+| Flag | Description |
+|------|-------------|
+| `--session=<id>` | Session ID (default: "default") |
+| `--phone=<number>` | Phone number for pairing code |
+| `--force` | Clear existing session before pairing |
+| `--to=<number>` | Recipient phone number |
+| `--message=<text>` | Message to send |
 
 ### JSON Output Format
 
 All commands return JSON:
 
+**pair:**
+```json
+{"success":true,"status":"pairing-code","pairingCode":"ABCD-EFGH","session":"work"}
+```
+
 **check:**
 ```json
-{"success":true,"status":"connected","message":"Session valid"}
+{"success":true,"status":"connected","session":"work","message":"Session valid"}
 ```
 
 **list:**
 ```json
-{"success":true,"chats":[{"index":0,"name":"John Doe","type":"contact","jid":"..."}]}
+{"success":true,"chats":[{"index":0,"name":"John Doe","type":"contact"}],"session":"work"}
 ```
 
 **send:**
 ```json
-{"success":true,"status":"sent","to":"+1234567890","message":"Hello"}
+{"success":true,"status":"sent","to":"+1234567890","message":"Hello","session":"work"}
+```
+
+**sessions:**
+```json
+{"success":true,"sessions":[{"id":"work","status":"connected","createdAt":"..."}]}
 ```
 
 **error:**
 ```json
-{"success":false,"error":"Not connected. Run pair first."}
+{"success":false,"error":"Not connected. Run pair first.","session":"work"}
 ```
 
 ## Cron Example
 
 ```cron
-# Send daily reminder at 9am
-0 9 * * * cd /path/to/whatsapp-scheduler-tui && node cli.js send --to="+1234567890" --message="Daily reminder"
+# Send daily reminder via work account at 9am
+0 9 * * * cd /path && node cli.js send --session=work --to="+1234567890" --message="Daily reminder"
 ```
 
-## Session Persistence
+## Session Storage
 
-Session stored in: `~/.whatsapp-scheduler-session`
+Sessions stored in: `~/.whatsapp-scheduler/`
 
-Once paired, session persists across runs. No need to pair again until:
-- Manual logout
+```
+~/.whatsapp-scheduler/
+├── sessions/
+│   ├── default/    (Chrome userDataDir)
+│   ├── work/
+│   ├── personal/
+│   └── user123/    (for API users)
+├── registry.json   (session metadata)
+```
+
+Session persists across runs. No need to pair again until:
+- Manual `delete`
+- `--force` flag used
 - Session expires (WhatsApp limit: ~14 days)
 - Different machine/IP
 
 ## How It Works
 
-1. **init()** - Launches browser, checks if session exists
+1. **init()** - Launches browser with session-specific userDataDir
 2. **pair()** - Pairing code or QR code authentication
 3. **listChats()** - Extracts chat list from DOM
 4. **sendMessage()** - Search → Click chat → Type → Send
@@ -112,8 +158,6 @@ When running in TUI mode, debug files are saved:
 - `*.json` - DOM analysis
 - `*.png` - Screenshots
 
-These help troubleshoot selectors when WhatsApp UI changes.
-
 ## Requirements
 
 - Node.js 18+
@@ -123,9 +167,34 @@ These help troubleshoot selectors when WhatsApp UI changes.
 
 | Issue | Cause | Solution |
 |-------|-------|----------|
-| Session invalid | Expired or IP change | Re-pair |
+| Session invalid | Expired or IP change | Re-pair with `--force` |
 | Chat not found | Wrong phone format | Use digits only |
 | Send fails | Selector changed | Check debug HTML |
+| Multiple accounts | Need different sessions | Use `--session=<id>` |
+
+## API Integration (Phase 2)
+
+CLI can be called by API backends:
+
+```javascript
+// API server pseudo-code
+import { spawn } from 'child_process';
+
+async function sendMessage(userId, to, message) {
+  const proc = spawn('node', ['cli.js', 'send', 
+    `--session=${userId}`, 
+    `--to=${to}`, 
+    `--message=${message}`
+  ]);
+  
+  let output = '';
+  proc.stdout.on('data', data => output += data);
+  
+  return new Promise(resolve => {
+    proc.on('close', () => resolve(JSON.parse(output)));
+  });
+}
+```
 
 ## Related
 
