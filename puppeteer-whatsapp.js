@@ -286,6 +286,12 @@ async function checkAuthOptions(phoneNumber) {
               log(codeResult.bodyText.substring(0, 800), 'warn');
             } else if (codeResult.code) {
               log(`Pairing code: ${codeResult.code}`, 'success');
+              log('Pairing code generated. User needs to enter this on their phone.', 'warn');
+              log('After entering on phone, this page will transition to main chat screen.', 'warn');
+              
+              // Take screenshot of pairing code screen
+              await takeScreenshot('pairing-code-screen.png');
+              
               return { 
                 success: true, 
                 method: 'pairing-code',
@@ -400,15 +406,58 @@ async function waitForConnection(timeout = 60000) {
   
   while (Date.now() - startTime < timeout) {
     try {
-      const isConnected = await page.evaluate(() => {
-        const chatList = document.querySelector('#pane-side');
-        const mainChat = document.querySelector('[data-testid="chat-list"]');
-        return chatList || mainChat || document.querySelector('[data-testid="conversation-panel-wrapper"]');
+      // Check if we're connected by looking for main chat UI elements
+      const result = await page.evaluate(() => {
+        // Multiple ways to detect successful connection
+        
+        // Method 1: Check for chat list pane
+        const paneSide = document.querySelector('#pane-side');
+        
+        // Method 2: Check for any chat-related test IDs
+        const chatList = document.querySelector('[data-testid="chat-list"]');
+        
+        // Method 3: Check for search input (always present when logged in)
+        const searchInput = document.querySelector('[data-testid="chat-list-search"]');
+        
+        // Method 4: Check for menu button (profile menu)
+        const menuBtn = document.querySelector('[data-testid="menu"]');
+        
+        // Method 5: Check page content - if we see chat-like content
+        const bodyText = document.body.innerText;
+        const hasChatKeywords = bodyText.includes('Chats') || bodyText.includes('Search') || bodyText.includes('New chat');
+        
+        // Method 6: Check we're NOT on login/pairing screen
+        const stillOnLogin = bodyText.includes('Scan to log in') || bodyText.includes('Enter code on phone') || bodyText.includes('Link with phone number');
+        
+        // Count how many indicators we found
+        let indicators = 0;
+        if (paneSide) indicators++;
+        if (chatList) indicators++;
+        if (searchInput) indicators++;
+        if (menuBtn) indicators++;
+        if (hasChatKeywords) indicators++;
+        
+        return {
+          connected: indicators >= 2 && !stillOnLogin,
+          indicators,
+          paneSide: !!paneSide,
+          chatList: !!chatList,
+          searchInput: !!searchInput,
+          menuBtn: !!menuBtn,
+          stillOnLogin,
+          bodyPreview: bodyText.substring(0, 200)
+        };
       });
       
-      if (isConnected) {
+      // Log what we found for debugging
+      if (!result.connected) {
+        log(`Checking... indicators: ${result.indicators}, stillOnLogin: ${result.stillOnLogin}`);
+      }
+      
+      if (result.connected) {
         connectionState = 'connected';
         log('Connected to WhatsApp!', 'success');
+        log(`Detected: pane=${result.paneSide}, chatList=${result.chatList}, search=${result.searchInput}, menu=${result.menuBtn}`);
         
         const userInfo = await getUserInfo();
         if (userInfo) {
@@ -419,9 +468,10 @@ async function waitForConnection(timeout = 60000) {
         return true;
       }
       
-      await delay(1000);
+      await delay(2000);  // Check every 2 seconds
     } catch (err) {
-      await delay(1000);
+      log(`Check error: ${err.message}`, 'warn');
+      await delay(2000);
     }
   }
   
