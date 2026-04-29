@@ -963,33 +963,6 @@ async function sendMessage(jid, content) {
     return { success: false, error: err.message };
   }
 }
-      log('Message input not found', 'error');
-      return { success: false, error: 'Input not found' };
-    }
-    
-    await inputBox.focus();
-    await inputBox.type(content, { delay: 20 });
-    await delay(300);
-    
-    const sendBtn = await page.$('[data-testid="compose-btn-send"]');
-    if (sendBtn) {
-      await sendBtn.click();
-      log('Message sent!', 'success');
-      
-      await delay(1000);
-      
-      return { success: true };
-    } else {
-      await page.keyboard.press('Enter');
-      log('Message sent via Enter key', 'success');
-      
-      return { success: true };
-    }
-  } catch (err) {
-    log(`Send error: ${err.message}`, 'error');
-    return { success: false, error: err.message };
-  }
-}
 
 async function takeScreenshot(path = 'screenshot.png') {
   if (!page) {
