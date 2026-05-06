@@ -1,4 +1,8 @@
 import puppeteer from 'puppeteer';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import { execSync } from 'child_process';
 import {
   getSessionPath,
   sessionExists,
@@ -22,6 +26,36 @@ function output(data) {
   console.log(JSON.stringify(data));
 }
 
+function cleanupOrphanedLock(sessionPath) {
+  const lockFile = path.join(sessionPath, 'SingletonLock');
+  
+  try {
+    if (fs.existsSync(lockFile)) {
+      const lockTarget = fs.readlinkSync(lockFile);
+      const pidMatch = lockTarget.match(/-(\d+)$/);
+      
+      if (pidMatch) {
+        const pid = parseInt(pidMatch[1]);
+        
+        try {
+          process.kill(pid, 0);
+        } catch {
+          console.log(`Cleaning up orphaned lock file (PID ${pid} not running)`);
+          fs.unlinkSync(lockFile);
+          
+          try {
+            execSync(`pkill -f "chrome.*${sessionPath}"`, { stdio: 'ignore' });
+          } catch {
+            // No processes to kill
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error(`Lock cleanup error: ${error.message}`);
+  }
+}
+
 async function init(sessionId, headless = true) {
   currentSessionId = sessionId;
   const sessionPath = getSessionPath(sessionId);
@@ -29,6 +63,8 @@ async function init(sessionId, headless = true) {
   if (!sessionExists(sessionId)) {
     createSession(sessionId);
   }
+  
+  cleanupOrphanedLock(sessionPath);
   
   browser = await puppeteer.launch({
     headless,
