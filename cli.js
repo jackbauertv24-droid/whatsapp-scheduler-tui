@@ -151,9 +151,12 @@ async function pair(sessionId, phoneNumber = null, force = false) {
     if (phoneInput) {
       console.log('Phone input found');
       
-      // Enter phone number (remove non-digits)
-      const cleanPhone = phoneNumber.replace(/[^0-9]/g, '');
-      console.log(`Entering phone number: ${cleanPhone}`);
+      // Enter phone number (strip country code prefix if present)
+      // WhatsApp's country selector already adds the prefix
+      // User might provide: +8613172117770 or 13172117770
+      let cleanPhone = phoneNumber.replace(/^\+\d{1,3}/, ''); // Strip +86, +1, etc.
+      cleanPhone = cleanPhone.replace(/[^0-9]/g, ''); // Keep only digits
+      console.log(`Entering phone number: ${cleanPhone} (without country code)`);
       await phoneInput.click();
       await phoneInput.type(cleanPhone, { delay: 50 });
       await delay(1000);
