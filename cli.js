@@ -349,12 +349,17 @@ async function sendMessage(sessionId, to, recipientName, message, timeout = 10) 
   
   // Use recipient name for search (better for groups), fallback to extracting name from JID
   const searchTerm = recipientName || to.split('@')[0];
+  
+  // Simplify search term for better WhatsApp search compatibility
+  // Remove + prefix and extra spaces, keep core identifying text
+  const simplifiedSearch = searchTerm.replace(/[+]/g, '').replace(/\s+/g, ' ').trim();
+  
   await searchInput.click();
   await delay(100);
   await page.keyboard.down('Control');
   await searchInput.press('a');
   await page.keyboard.up('Control');
-  await searchInput.type(searchTerm, { delay: 30 });
+  await searchInput.type(simplifiedSearch, { delay: 30 });
   await delay(2000);
   
   const chatElement = await page.$('[data-testid="list-item-1"] div[role="gridcell"][tabindex="0"]');
