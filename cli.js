@@ -130,6 +130,7 @@ async function pair(sessionId, phoneNumber = null, force = false) {
   
   // Always try pairing code method first (preferred over QR)
   if (pairingButton) {
+    console.log('Clicking pairing button...');
     await page.evaluate(() => {
       const btnDivs = document.querySelectorAll('div[role="button"]');
       for (const div of btnDivs) {
@@ -148,6 +149,8 @@ async function pair(sessionId, phoneNumber = null, force = false) {
     const phoneInput = await page.$('input[type="tel"], input');
     
     if (phoneInput) {
+      console.log('Phone input found, extracting pairing code...');
+      
       // If phone number provided, enter it
       if (phoneNumber) {
         const cleanPhone = phoneNumber.replace(/[^0-9]/g, '');
@@ -188,6 +191,8 @@ async function pair(sessionId, phoneNumber = null, force = false) {
         return { code, bodyText };
       });
       
+      console.log(`Extracted pairing code: ${codeResult.code || 'NOT FOUND'}`);
+      
       if (codeResult.code) {
         updateSession(sessionId, { phone: phoneNumber, status: 'pairing' });
         output({
@@ -213,8 +218,14 @@ async function pair(sessionId, phoneNumber = null, force = false) {
         updateSession(sessionId, { status: 'timeout' });
         await disconnect();
         return { success: false, status: 'pairing-timeout', message: 'Pairing not completed in 120s', session: sessionId };
+      } else {
+        console.log('Pairing code extraction failed, falling back to QR');
       }
+    } else {
+      console.log('Phone input not found, falling back to QR');
     }
+  } else {
+    console.log('Pairing button not found, falling back to QR');
   }
   
   updateSession(sessionId, { status: 'qr-pairing' });
