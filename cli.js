@@ -153,10 +153,26 @@ async function pair(sessionId, phoneNumber = null, force = false) {
       
       // Enter phone number (strip country code prefix if present)
       // WhatsApp's country selector already adds the prefix
-      // User might provide: +8613172117770 or 13172117770
-      let cleanPhone = phoneNumber.replace(/^\+\d{1,3}/, ''); // Strip +86, +1, etc.
+      // Common country codes: +86 (China), +1 (US), +852 (HK), etc.
+      let cleanPhone = phoneNumber;
+      
+      // Strip + prefix and country code
+      if (cleanPhone.startsWith('+')) {
+        cleanPhone = cleanPhone.substring(1); // Remove +
+        
+        // Try to strip common country codes (sorted by length, longest first)
+        const countryCodes = ['852', '86', '1', '44', '91', '65', '60', '66', '81', '82', '886'];
+        for (const cc of countryCodes) {
+          if (cleanPhone.startsWith(cc)) {
+            cleanPhone = cleanPhone.substring(cc.length);
+            console.log(`Detected country code +${cc}, entering local number`);
+            break;
+          }
+        }
+      }
+      
       cleanPhone = cleanPhone.replace(/[^0-9]/g, ''); // Keep only digits
-      console.log(`Entering phone number: ${cleanPhone} (without country code)`);
+      console.log(`Entering phone number: ${cleanPhone}`);
       await phoneInput.click();
       await phoneInput.type(cleanPhone, { delay: 50 });
       await delay(1000);
