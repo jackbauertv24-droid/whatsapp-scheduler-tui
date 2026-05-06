@@ -308,7 +308,7 @@ async function listChats(sessionId, timeout = 10) {
   return { success: true, chats, session: sessionId };
 }
 
-async function sendMessage(sessionId, to, message, timeout = 10) {
+async function sendMessage(sessionId, to, recipientName, message, timeout = 10) {
   await init(sessionId, true);
   
   // Wait for connection to establish (retry polling)
@@ -347,7 +347,8 @@ async function sendMessage(sessionId, to, message, timeout = 10) {
     return { success: false, error: 'Search input not found', session: sessionId };
   }
   
-  const searchTerm = to.replace(/[^0-9]/g, '');
+  // Use recipient name for search (better for groups), fallback to extracting name from JID
+  const searchTerm = recipientName || to.split('@')[0];
   await searchInput.click();
   await delay(100);
   await page.keyboard.down('Control');
@@ -369,6 +370,29 @@ async function sendMessage(sessionId, to, message, timeout = 10) {
   if (!mainPanel) {
     await disconnect();
     return { success: false, error: 'Chat did not open', session: sessionId };
+  }
+  
+  // VALIDATE: Check if correct recipient was opened
+  const chatTitle = await page.evaluate(() => {
+    const header = document.querySelector('#main header');
+    if (!header) return null;
+    const titleSpan = header.querySelector('span[dir="auto"]');
+    return titleSpan ? titleSpan.textContent.trim() : null;
+  });
+  
+  if (!chatTitle) {
+    await disconnect();
+    return { success: false, error: 'Could not read chat title', session: sessionId };
+  }
+  
+  // Fuzzy match - check if chat title contains search term (handles slight variations)
+  if (!chatTitle.toLowerCase().includes(searchTerm.toLowerCase())) {
+    await disconnect();
+    return { 
+      success: false, 
+      error: `Wrong recipient opened: expected "${searchTerm}", got "${chatTitle}"`,
+      session: sessionId 
+    };
   }
   
   const messageInput = await page.$('[data-testid="conversation-compose-box-input"]');
@@ -430,6 +454,7 @@ function parseArgs(args) {
     phone: null,
     force: false,
     to: null,
+    name: null,
     message: null,
     timeout: 10
   };
@@ -443,6 +468,8 @@ function parseArgs(args) {
       result.force = true;
     } else if (arg.startsWith('--to=')) {
       result.to = arg.split('=')[1];
+    } else if (arg.startsWith('--name=')) {
+      result.name = arg.split('=')[1];
     } else if (arg.startsWith('--message=')) {
       result.message = arg.split('=')[1];
     } else if (arg.startsWith('--timeout=')) {
@@ -475,10 +502,10 @@ async function main() {
       
     case 'send':
       if (!parsed.to || !parsed.message) {
-        output({ success: false, error: 'Usage: send --to="+1234567890" --message="Hello"', session: parsed.session });
+        output({ success: false, error: 'Usage: send --to="+1234567890" --name="Contact Name" --message="Hello"', session: parsed.session });
         break;
       }
-      output(await sendMessage(parsed.session, parsed.to, parsed.message, parsed.timeout));
+      output(await sendMessage(parsed.session, parsed.to, parsed.name, parsed.message, parsed.timeout));
       break;
       
     case 'sessions':
@@ -510,8 +537,8 @@ Usage:
   node cli.js list [--session=<id>] [--timeout=10]
     List contacts/groups. --timeout sets retry wait seconds (default 10).
   
-  node cli.js send [--session=<id>] --to="+1234567890" --message="Hello" [--timeout=10]
-    Send message. --timeout sets retry wait seconds (default 10).
+  node cli.js send [--session=<id>] --to="+1234567890" --name="Contact Name" --message="Hello" [--timeout=10]
+    Send message. --name is the display name used for search and validation. --timeout sets retry wait seconds (default 10).
   
   node cli.js sessions
     List all sessions
