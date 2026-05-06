@@ -149,27 +149,30 @@ async function pair(sessionId, phoneNumber = null, force = false) {
     const phoneInput = await page.$('input[type="tel"], input');
     
     if (phoneInput) {
-      console.log('Phone input found, extracting pairing code...');
+      console.log('Phone input found');
       
-      // If phone number provided, enter it
-      if (phoneNumber) {
-        const cleanPhone = phoneNumber.replace(/[^0-9]/g, '');
-        await phoneInput.click();
-        await phoneInput.type(cleanPhone, { delay: 50 });
-        await delay(500);
-        
-        await page.evaluate(() => {
-          const btnDivs = document.querySelectorAll('div[role="button"]');
-          for (const div of btnDivs) {
-            const text = (div.textContent || '').toLowerCase().trim();
-            if (text === 'next' || text.includes('next')) {
-              div.click();
-              return true;
-            }
+      // Enter phone number (remove non-digits)
+      const cleanPhone = phoneNumber.replace(/[^0-9]/g, '');
+      console.log(`Entering phone number: ${cleanPhone}`);
+      await phoneInput.click();
+      await phoneInput.type(cleanPhone, { delay: 50 });
+      await delay(1000);
+      
+      // Click Next button
+      console.log('Clicking Next button...');
+      const nextClicked = await page.evaluate(() => {
+        const btnDivs = document.querySelectorAll('div[role="button"]');
+        for (const div of btnDivs) {
+          const text = (div.textContent || '').toLowerCase().trim();
+          if (text === 'next' || text.includes('next')) {
+            div.click();
+            return true;
           }
-          return false;
-        });
-      }
+        }
+        return false;
+      });
+      
+      console.log(`Next button clicked: ${nextClicked}`);
       
       await delay(5000);
       
@@ -218,8 +221,7 @@ async function pair(sessionId, phoneNumber = null, force = false) {
       
       console.log(`Extracted pairing code: ${codeResult.code || 'NOT FOUND'}`);
       if (!codeResult.code) {
-        console.log('Page content snippet:', codeResult.bodyText.substring(0, 500));
-        console.log('Lines with single chars:', lines.filter(l => l.length <= 2).slice(0, 20));
+        console.log('Page content (first 300 chars):', codeResult.bodyText.substring(0, 300));
       }
       
       if (codeResult.code) {
