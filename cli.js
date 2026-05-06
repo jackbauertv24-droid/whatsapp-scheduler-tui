@@ -173,7 +173,8 @@ async function pair(sessionId, phoneNumber = null, force = false) {
       
       await delay(5000);
       
-      const codeResult = await page.evaluate(() => {
+      // Try multiple extraction attempts with increasing delays
+      let codeResult = await page.evaluate(() => {
         const bodyText = document.body.innerText;
         const lines = bodyText.split('\n');
         const codeLetters = lines.filter(l => l.length === 1 && l.match(/[A-Z0-9-]/));
@@ -190,6 +191,30 @@ async function pair(sessionId, phoneNumber = null, force = false) {
         }
         return { code, bodyText };
       });
+      
+      // If no code found, wait longer and try again
+      if (!codeResult.code) {
+        console.log('Code not found after 5s, waiting 10s more...');
+        await delay(10000);
+        
+        codeResult = await page.evaluate(() => {
+          const bodyText = document.body.innerText;
+          const lines = bodyText.split('\n');
+          const codeLetters = lines.filter(l => l.length === 1 && l.match(/[A-Z0-9-]/));
+          let code = '';
+          if (codeLetters.length >= 9) {
+            code = codeLetters.slice(0, 9).join('');
+          } else if (codeLetters.length >= 8) {
+            code = codeLetters.slice(0, 8).join('');
+          }
+          if (!code) {
+            const joined = bodyText.replace(/\n/g, '');
+            const match = joined.match(/[A-Z0-9]{4}-[A-Z0-9]{4}/);
+            if (match) code = match[0];
+          }
+          return { code, bodyText };
+        });
+      }
       
       console.log(`Extracted pairing code: ${codeResult.code || 'NOT FOUND'}`);
       if (!codeResult.code) {
