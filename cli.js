@@ -128,7 +128,8 @@ async function pair(sessionId, phoneNumber = null, force = false) {
     b.text.toLowerCase().includes('log in with phone')
   );
   
-  if (pairingButton && phoneNumber) {
+  // Always try pairing code method first (preferred over QR)
+  if (pairingButton) {
     await page.evaluate(() => {
       const btnDivs = document.querySelectorAll('div[role="button"]');
       for (const div of btnDivs) {
@@ -143,24 +144,29 @@ async function pair(sessionId, phoneNumber = null, force = false) {
     
     await delay(2000);
     
+    // Check if phone input appeared
     const phoneInput = await page.$('input[type="tel"], input');
+    
     if (phoneInput) {
-      const cleanPhone = phoneNumber.replace(/[^0-9]/g, '');
-      await phoneInput.click();
-      await phoneInput.type(cleanPhone, { delay: 50 });
-      await delay(500);
-      
-      await page.evaluate(() => {
-        const btnDivs = document.querySelectorAll('div[role="button"]');
-        for (const div of btnDivs) {
-          const text = (div.textContent || '').toLowerCase().trim();
-          if (text === 'next' || text.includes('next')) {
-            div.click();
-            return true;
+      // If phone number provided, enter it
+      if (phoneNumber) {
+        const cleanPhone = phoneNumber.replace(/[^0-9]/g, '');
+        await phoneInput.click();
+        await phoneInput.type(cleanPhone, { delay: 50 });
+        await delay(500);
+        
+        await page.evaluate(() => {
+          const btnDivs = document.querySelectorAll('div[role="button"]');
+          for (const div of btnDivs) {
+            const text = (div.textContent || '').toLowerCase().trim();
+            if (text === 'next' || text.includes('next')) {
+              div.click();
+              return true;
+            }
           }
-        }
-        return false;
-      });
+          return false;
+        });
+      }
       
       await delay(5000);
       
@@ -570,7 +576,7 @@ WhatsApp Scheduler CLI
 
 Usage:
   node cli.js pair [--session=<id>] [--phone=+1234567890] [--force]
-    Pair session (pairing code or QR). --force clears existing session.
+    Pair session (pairing code preferred). --phone optional for pairing code. --force clears existing session.
   
   node cli.js check [--session=<id>] [--timeout=10]
     Check if session is valid. --timeout sets retry wait seconds (default 10).
