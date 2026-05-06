@@ -175,21 +175,51 @@ async function pair(sessionId, phoneNumber = null, force = false) {
       console.log(`Entering phone number: ${cleanPhone}`);
       await phoneInput.click();
       await phoneInput.type(cleanPhone, { delay: 50 });
-      await delay(1000);
+      await delay(2000);
       
-      // Click Next button
+      // Click Next button - try multiple selectors
       console.log('Clicking Next button...');
-      const nextClicked = await page.evaluate(() => {
-        const btnDivs = document.querySelectorAll('div[role="button"]');
-        for (const div of btnDivs) {
-          const text = (div.textContent || '').toLowerCase().trim();
-          if (text === 'next' || text.includes('next')) {
-            div.click();
-            return true;
+      let nextClicked = false;
+      
+      // Try approach 1: Puppeteer click on button with text
+      try {
+        const nextBtn = await page.evaluateHandle(() => {
+          const allClickable = [
+            ...document.querySelectorAll('div[role="button"]'),
+            ...document.querySelectorAll('button'),
+            ...document.querySelectorAll('[data-tabindex]')
+          ].filter(el => {
+            const text = (el.textContent || '').toLowerCase().trim();
+            return text === 'next' || text === 'Next';
+          });
+          return allClickable[0] || null;
+        });
+        
+        if (nextBtn && nextBtn.asElement) {
+          const element = nextBtn.asElement();
+          if (element) {
+            await element.click();
+            nextClicked = true;
+            console.log('Clicked Next via evaluateHandle');
           }
         }
-        return false;
-      });
+      } catch (e) {
+        console.log('Approach 1 failed:', e.message);
+      }
+      
+      // Try approach 2: XPath if approach 1 failed
+      if (!nextClicked) {
+        try {
+          const [nextBtnElement] = await page.$x("//div[contains(text(), 'Next') or contains(text(), 'next')]");
+          if (nextBtnElement) {
+            await nextBtnElement.click();
+            nextClicked = true;
+            console.log('Clicked Next via XPath');
+          }
+        } catch (e) {
+          console.log('Approach 2 failed:', e.message);
+        }
+      }
       
       console.log(`Next button clicked: ${nextClicked}`);
       
