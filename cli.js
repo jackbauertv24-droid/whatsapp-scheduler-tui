@@ -192,6 +192,10 @@ async function pair(sessionId, phoneNumber = null, force = false) {
       });
       
       console.log(`Extracted pairing code: ${codeResult.code || 'NOT FOUND'}`);
+      if (!codeResult.code) {
+        console.log('Page content snippet:', codeResult.bodyText.substring(0, 500));
+        console.log('Lines with single chars:', lines.filter(l => l.length <= 2).slice(0, 20));
+      }
       
       if (codeResult.code) {
         updateSession(sessionId, { phone: phoneNumber, status: 'pairing' });
